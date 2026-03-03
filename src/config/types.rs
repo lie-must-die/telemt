@@ -817,6 +817,14 @@ pub struct ApiConfig {
     #[serde(default = "default_api_request_body_limit_bytes")]
     pub request_body_limit_bytes: usize,
 
+    /// Enable runtime snapshots that require read-lock aggregation on API request path.
+    #[serde(default = "default_api_minimal_runtime_enabled")]
+    pub minimal_runtime_enabled: bool,
+
+    /// Cache TTL for minimal runtime snapshots in milliseconds (0 disables caching).
+    #[serde(default = "default_api_minimal_runtime_cache_ttl_ms")]
+    pub minimal_runtime_cache_ttl_ms: u64,
+
     /// Read-only mode: mutating endpoints are rejected.
     #[serde(default)]
     pub read_only: bool,
@@ -830,6 +838,8 @@ impl Default for ApiConfig {
             whitelist: default_api_whitelist(),
             auth_header: String::new(),
             request_body_limit_bytes: default_api_request_body_limit_bytes(),
+            minimal_runtime_enabled: default_api_minimal_runtime_enabled(),
+            minimal_runtime_cache_ttl_ms: default_api_minimal_runtime_cache_ttl_ms(),
             read_only: false,
         }
     }

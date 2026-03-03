@@ -120,6 +120,9 @@ fn warn_non_hot_changes(old: &ProxyConfig, new: &ProxyConfig) {
         || old.server.api.whitelist != new.server.api.whitelist
         || old.server.api.auth_header != new.server.api.auth_header
         || old.server.api.request_body_limit_bytes != new.server.api.request_body_limit_bytes
+        || old.server.api.minimal_runtime_enabled != new.server.api.minimal_runtime_enabled
+        || old.server.api.minimal_runtime_cache_ttl_ms
+            != new.server.api.minimal_runtime_cache_ttl_ms
         || old.server.api.read_only != new.server.api.read_only
     {
         warn!("config reload: server.api changed; restart required");

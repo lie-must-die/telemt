@@ -104,6 +104,14 @@ pub(crate) fn default_api_request_body_limit_bytes() -> usize {
     64 * 1024
 }
 
+pub(crate) fn default_api_minimal_runtime_enabled() -> bool {
+    false
+}
+
+pub(crate) fn default_api_minimal_runtime_cache_ttl_ms() -> u64 {
+    1000
+}
+
 pub(crate) fn default_prefer_4() -> u8 {
     4
 }

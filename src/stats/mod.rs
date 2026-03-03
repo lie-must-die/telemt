@@ -48,6 +48,9 @@ pub struct Stats {
     me_single_endpoint_quarantine_bypass_total: AtomicU64,
     me_single_endpoint_shadow_rotate_total: AtomicU64,
     me_single_endpoint_shadow_rotate_skipped_quarantine_total: AtomicU64,
+    me_floor_mode_switch_total: AtomicU64,
+    me_floor_mode_switch_static_to_adaptive_total: AtomicU64,
+    me_floor_mode_switch_adaptive_to_static_total: AtomicU64,
     me_handshake_error_codes: DashMap<i32, AtomicU64>,
     me_route_drop_no_conn: AtomicU64,
     me_route_drop_channel_closed: AtomicU64,
@@ -439,6 +442,24 @@ impl Stats {
                 .fetch_add(1, Ordering::Relaxed);
         }
     }
+    pub fn increment_me_floor_mode_switch_total(&self) {
+        if self.telemetry_me_allows_normal() {
+            self.me_floor_mode_switch_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    pub fn increment_me_floor_mode_switch_static_to_adaptive_total(&self) {
+        if self.telemetry_me_allows_normal() {
+            self.me_floor_mode_switch_static_to_adaptive_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    pub fn increment_me_floor_mode_switch_adaptive_to_static_total(&self) {
+        if self.telemetry_me_allows_normal() {
+            self.me_floor_mode_switch_adaptive_to_static_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
     pub fn get_connects_all(&self) -> u64 { self.connects_all.load(Ordering::Relaxed) }
     pub fn get_connects_bad(&self) -> u64 { self.connects_bad.load(Ordering::Relaxed) }
     pub fn get_me_keepalive_sent(&self) -> u64 { self.me_keepalive_sent.load(Ordering::Relaxed) }
@@ -498,6 +519,17 @@ impl Stats {
     }
     pub fn get_me_single_endpoint_shadow_rotate_skipped_quarantine_total(&self) -> u64 {
         self.me_single_endpoint_shadow_rotate_skipped_quarantine_total
+            .load(Ordering::Relaxed)
+    }
+    pub fn get_me_floor_mode_switch_total(&self) -> u64 {
+        self.me_floor_mode_switch_total.load(Ordering::Relaxed)
+    }
+    pub fn get_me_floor_mode_switch_static_to_adaptive_total(&self) -> u64 {
+        self.me_floor_mode_switch_static_to_adaptive_total
+            .load(Ordering::Relaxed)
+    }
+    pub fn get_me_floor_mode_switch_adaptive_to_static_total(&self) -> u64 {
+        self.me_floor_mode_switch_adaptive_to_static_total
             .load(Ordering::Relaxed)
     }
     pub fn get_me_handshake_error_code_counts(&self) -> Vec<(i32, u64)> {

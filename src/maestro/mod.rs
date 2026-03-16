@@ -349,8 +349,13 @@ pub async fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let beobachten = Arc::new(BeobachtenStore::new());
     let rng = Arc::new(SecureRandom::new());
 
-    // Connection concurrency limit
-    let max_connections = Arc::new(Semaphore::new(10_000));
+    // Connection concurrency limit (0 = unlimited)
+    let max_connections_limit = if config.server.max_connections == 0 {
+        Semaphore::MAX_PERMITS
+    } else {
+        config.server.max_connections as usize
+    };
+    let max_connections = Arc::new(Semaphore::new(max_connections_limit));
 
     let me2dc_fallback = config.general.me2dc_fallback;
     let me_init_retry_attempts = config.general.me_init_retry_attempts;

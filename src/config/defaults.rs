@@ -147,6 +147,10 @@ pub(crate) fn default_proxy_protocol_header_timeout_ms() -> u64 {
     500
 }
 
+pub(crate) fn default_server_max_connections() -> u32 {
+    10_000
+}
+
 pub(crate) fn default_prefer_4() -> u8 {
     4
 }

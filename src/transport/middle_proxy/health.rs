@@ -186,9 +186,7 @@ pub(super) async fn reap_draining_writers(
         }
     }
 
-    let mut active_draining_writer_ids = HashSet::with_capacity(draining_writers.len());
     for writer in draining_writers {
-        active_draining_writer_ids.insert(writer.id);
         if drain_ttl_secs > 0
             && writer.draining_started_at_epoch_secs != 0
             && now_epoch_secs.saturating_sub(writer.draining_started_at_epoch_secs) > drain_ttl_secs
@@ -214,11 +212,8 @@ pub(super) async fn reap_draining_writers(
         {
             warn!(writer_id = writer.id, "Drain timeout, force-closing");
             force_close_writer_ids.push(writer.id);
-            active_draining_writer_ids.remove(&writer.id);
         }
     }
-
-    warn_next_allowed.retain(|writer_id, _| active_draining_writer_ids.contains(writer_id));
 
     let close_budget = health_drain_close_budget();
     let requested_force_close = force_close_writer_ids.len();
@@ -257,6 +252,18 @@ pub(super) async fn reap_draining_writers(
             "ME draining close backlog deferred to next health cycle"
         );
     }
+
+    // Keep warn cooldown state for draining writers still present in the pool;
+    // drop state only once a writer is actually removed.
+    let active_draining_writer_ids = {
+        let writers = pool.writers.read().await;
+        writers
+            .iter()
+            .filter(|writer| writer.draining.load(std::sync::atomic::Ordering::Relaxed))
+            .map(|writer| writer.id)
+            .collect::<HashSet<u64>>()
+    };
+    warn_next_allowed.retain(|writer_id, _| active_draining_writer_ids.contains(writer_id));
 }
 
 pub(super) fn health_drain_close_budget() -> usize {

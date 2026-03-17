@@ -878,7 +878,7 @@ impl RunningClientHandler {
             {
                 Ok(reservation) => reservation,
                 Err(e) => {
-                    warn!(user = %user, error = %e, "User limit exceeded");
+                    warn!(user = %user, error = %e, "User admission check failed");
                     return Err(e);
                 }
             };
@@ -998,8 +998,8 @@ impl RunningClientHandler {
 
     #[cfg(test)]
     async fn check_user_limits_static(
-        user: &str, 
-        config: &ProxyConfig, 
+        user: &str,
+        config: &ProxyConfig,
         stats: &Stats,
         peer_addr: SocketAddr,
         ip_tracker: &UserIpTracker,

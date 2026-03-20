@@ -18,6 +18,8 @@ use crate::transport::UpstreamManager;
 use super::ConnRegistry;
 use super::codec::WriterCommand;
 
+const ME_FORCE_CLOSE_SAFETY_FALLBACK_SECS: u64 = 300;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct RefillDcKey {
     pub dc: i32,
@@ -227,6 +229,14 @@ impl MePool {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs()
+    }
+
+    fn normalize_force_close_secs(force_close_secs: u64) -> u64 {
+        if force_close_secs == 0 {
+            ME_FORCE_CLOSE_SAFETY_FALLBACK_SECS
+        } else {
+            force_close_secs
+        }
     }
 
     pub fn new(
@@ -477,7 +487,9 @@ impl MePool {
             me_pool_drain_soft_evict_cooldown_ms: AtomicU64::new(
                 me_pool_drain_soft_evict_cooldown_ms.max(1),
             ),
-            me_pool_force_close_secs: AtomicU64::new(me_pool_force_close_secs),
+            me_pool_force_close_secs: AtomicU64::new(Self::normalize_force_close_secs(
+                me_pool_force_close_secs,
+            )),
             me_pool_min_fresh_ratio_permille: AtomicU32::new(Self::ratio_to_permille(
                 me_pool_min_fresh_ratio,
             )),
@@ -587,8 +599,10 @@ impl MePool {
         );
         self.me_pool_drain_soft_evict_cooldown_ms
             .store(pool_drain_soft_evict_cooldown_ms.max(1), Ordering::Relaxed);
-        self.me_pool_force_close_secs
-            .store(force_close_secs, Ordering::Relaxed);
+        self.me_pool_force_close_secs.store(
+            Self::normalize_force_close_secs(force_close_secs),
+            Ordering::Relaxed,
+        );
         self.me_pool_min_fresh_ratio_permille
             .store(Self::ratio_to_permille(min_fresh_ratio), Ordering::Relaxed);
         self.me_hardswap_warmup_delay_min_ms
@@ -733,12 +747,9 @@ impl MePool {
     }
 
     pub(super) fn force_close_timeout(&self) -> Option<Duration> {
-        let secs = self.me_pool_force_close_secs.load(Ordering::Relaxed);
-        if secs == 0 {
-            None
-        } else {
-            Some(Duration::from_secs(secs))
-        }
+        let secs =
+            Self::normalize_force_close_secs(self.me_pool_force_close_secs.load(Ordering::Relaxed));
+        Some(Duration::from_secs(secs))
     }
 
     pub(super) fn drain_soft_evict_enabled(&self) -> bool {

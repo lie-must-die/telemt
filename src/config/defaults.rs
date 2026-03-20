@@ -40,10 +40,10 @@ const DEFAULT_ME_ROUTE_HYBRID_MAX_WAIT_MS: u64 = 3000;
 const DEFAULT_ME_ROUTE_BLOCKING_SEND_TIMEOUT_MS: u64 = 250;
 const DEFAULT_ME_C2ME_SEND_TIMEOUT_MS: u64 = 4000;
 const DEFAULT_ME_POOL_DRAIN_SOFT_EVICT_ENABLED: bool = true;
-const DEFAULT_ME_POOL_DRAIN_SOFT_EVICT_GRACE_SECS: u64 = 30;
-const DEFAULT_ME_POOL_DRAIN_SOFT_EVICT_PER_WRITER: u8 = 1;
-const DEFAULT_ME_POOL_DRAIN_SOFT_EVICT_BUDGET_PER_CORE: u16 = 8;
-const DEFAULT_ME_POOL_DRAIN_SOFT_EVICT_COOLDOWN_MS: u64 = 5000;
+const DEFAULT_ME_POOL_DRAIN_SOFT_EVICT_GRACE_SECS: u64 = 10;
+const DEFAULT_ME_POOL_DRAIN_SOFT_EVICT_PER_WRITER: u8 = 2;
+const DEFAULT_ME_POOL_DRAIN_SOFT_EVICT_BUDGET_PER_CORE: u16 = 16;
+const DEFAULT_ME_POOL_DRAIN_SOFT_EVICT_COOLDOWN_MS: u64 = 1000;
 const DEFAULT_USER_MAX_UNIQUE_IPS_WINDOW_SECS: u64 = 30;
 const DEFAULT_ACCEPT_PERMIT_TIMEOUT_MS: u64 = 250;
 const DEFAULT_UPSTREAM_CONNECT_RETRY_ATTEMPTS: u32 = 2;
@@ -606,7 +606,7 @@ pub(crate) fn default_proxy_secret_len_max() -> usize {
 }
 
 pub(crate) fn default_me_reinit_drain_timeout_secs() -> u64 {
-    120
+    90
 }
 
 pub(crate) fn default_me_pool_drain_ttl_secs() -> u64 {
@@ -618,7 +618,7 @@ pub(crate) fn default_me_instadrain() -> bool {
 }
 
 pub(crate) fn default_me_pool_drain_threshold() -> u64 {
-    128
+    32
 }
 
 pub(crate) fn default_me_pool_drain_soft_evict_enabled() -> bool {

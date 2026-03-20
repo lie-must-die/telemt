@@ -135,8 +135,8 @@ impl MeSocksKdfPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum MeBindStaleMode {
-    Never,
     #[default]
+    Never,
     Ttl,
     Always,
 }
@@ -855,7 +855,7 @@ pub struct GeneralConfig {
     pub me_pool_min_fresh_ratio: f32,
 
     /// Drain timeout in seconds for stale ME writers after endpoint map changes.
-    /// Set to 0 to keep stale writers draining indefinitely (no force-close).
+    /// Set to 0 to use the runtime safety fallback timeout.
     #[serde(default = "default_me_reinit_drain_timeout_secs")]
     pub me_reinit_drain_timeout_secs: u64,
 
@@ -1068,8 +1068,13 @@ impl GeneralConfig {
 
     /// Resolve force-close timeout for stale writers.
     /// `me_reinit_drain_timeout_secs` remains backward-compatible alias.
+    /// A configured `0` uses the runtime safety fallback (300s).
     pub fn effective_me_pool_force_close_secs(&self) -> u64 {
-        self.me_reinit_drain_timeout_secs
+        if self.me_reinit_drain_timeout_secs == 0 {
+            300
+        } else {
+            self.me_reinit_drain_timeout_secs
+        }
     }
 }
 

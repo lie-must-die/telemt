@@ -1327,33 +1327,6 @@ async fn recover_single_endpoint_outage(
     }
 
     let (min_backoff_ms, max_backoff_ms) = pool.single_endpoint_outage_backoff_bounds_ms();
-    let bypass_quarantine = pool.single_endpoint_outage_disable_quarantine();
-    if !bypass_quarantine {
-        let quarantine_remaining = {
-            let mut guard = pool.endpoint_quarantine.lock().await;
-            let quarantine_now = Instant::now();
-            guard.retain(|_, expiry| *expiry > quarantine_now);
-            guard
-                .get(&endpoint)
-                .map(|expiry| expiry.saturating_duration_since(quarantine_now))
-        };
-
-        if let Some(remaining) = quarantine_remaining
-            && !remaining.is_zero()
-        {
-            outage_next_attempt.insert(key, now + remaining);
-            debug!(
-                dc = %key.0,
-                family = ?key.1,
-                %endpoint,
-                required,
-                wait_ms = remaining.as_millis(),
-                "Single-endpoint outage reconnect deferred by endpoint quarantine"
-            );
-            return;
-        }
-    }
-
     if *reconnect_budget == 0 {
         outage_next_attempt.insert(key, now + Duration::from_millis(min_backoff_ms.max(250)));
         debug!(
@@ -1369,6 +1342,7 @@ async fn recover_single_endpoint_outage(
     pool.stats
         .increment_me_single_endpoint_outage_reconnect_attempt_total();
 
+    let bypass_quarantine = pool.single_endpoint_outage_disable_quarantine();
     let attempt_ok = if bypass_quarantine {
         pool.stats
             .increment_me_single_endpoint_quarantine_bypass_total();
@@ -1576,6 +1550,170 @@ async fn maybe_rotate_single_endpoint_shadow(
     );
 }
 
+/// Last-resort safety net for draining writers stuck past their deadline.
+///
+/// Runs every `TICK_SECS` and force-closes any draining writer whose
+/// `drain_deadline_epoch_secs` has been exceeded by more than a threshold.
+///
+/// Two thresholds:
+///   - `SOFT_THRESHOLD_SECS` (60s): writers with no bound clients
+///   - `HARD_THRESHOLD_SECS` (300s): writers WITH bound clients (unconditional)
+///
+/// Intentionally kept trivial and independent of pool config to minimise
+/// the probability of panicking itself. Uses `SystemTime` directly
+/// as a fallback clock source and timeouts on every lock acquisition
+/// and writer removal so one stuck writer cannot block the rest.
+pub async fn me_zombie_writer_watchdog(pool: Arc<MePool>) {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    const TICK_SECS: u64 = 30;
+    const SOFT_THRESHOLD_SECS: u64 = 60;
+    const HARD_THRESHOLD_SECS: u64 = 300;
+    const LOCK_TIMEOUT_SECS: u64 = 5;
+    const REMOVE_TIMEOUT_SECS: u64 = 10;
+    const HARD_DETACH_TIMEOUT_STREAK: u8 = 3;
+
+    let mut removal_timeout_streak = HashMap::<u64, u8>::new();
+
+    loop {
+        tokio::time::sleep(Duration::from_secs(TICK_SECS)).await;
+
+        let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(d) => d.as_secs(),
+            Err(_) => continue,
+        };
+
+        // Phase 1: collect zombie IDs under a short read-lock with timeout.
+        let zombie_ids_with_meta: Vec<(u64, bool)> = {
+            let Ok(ws) = tokio::time::timeout(
+                Duration::from_secs(LOCK_TIMEOUT_SECS),
+                pool.writers.read(),
+            )
+            .await
+            else {
+                warn!("zombie_watchdog: writers read-lock timeout, skipping tick");
+                continue;
+            };
+            ws.iter()
+                .filter(|w| w.draining.load(std::sync::atomic::Ordering::Relaxed))
+                .filter_map(|w| {
+                    let deadline = w
+                        .drain_deadline_epoch_secs
+                        .load(std::sync::atomic::Ordering::Relaxed);
+                    if deadline == 0 {
+                        return None;
+                    }
+                    let overdue = now.saturating_sub(deadline);
+                    if overdue == 0 {
+                        return None;
+                    }
+                    let started = w
+                        .draining_started_at_epoch_secs
+                        .load(std::sync::atomic::Ordering::Relaxed);
+                    let drain_age = now.saturating_sub(started);
+                    if drain_age > HARD_THRESHOLD_SECS {
+                        return Some((w.id, true));
+                    }
+                    if overdue > SOFT_THRESHOLD_SECS {
+                        return Some((w.id, false));
+                    }
+                    None
+                })
+                .collect()
+        };
+        // read lock released here
+
+        if zombie_ids_with_meta.is_empty() {
+            removal_timeout_streak.clear();
+            continue;
+        }
+
+        let mut active_zombie_ids = HashSet::<u64>::with_capacity(zombie_ids_with_meta.len());
+        for (writer_id, _) in &zombie_ids_with_meta {
+            active_zombie_ids.insert(*writer_id);
+        }
+        removal_timeout_streak.retain(|writer_id, _| active_zombie_ids.contains(writer_id));
+
+        warn!(
+            zombie_count = zombie_ids_with_meta.len(),
+            soft_threshold_secs = SOFT_THRESHOLD_SECS,
+            hard_threshold_secs = HARD_THRESHOLD_SECS,
+            "Zombie draining writers detected by watchdog, force-closing"
+        );
+
+        // Phase 2: remove each writer individually with a timeout.
+        // One stuck removal cannot block the rest.
+        for (writer_id, had_clients) in &zombie_ids_with_meta {
+            let result = tokio::time::timeout(
+                Duration::from_secs(REMOVE_TIMEOUT_SECS),
+                pool.remove_writer_and_close_clients(*writer_id),
+            )
+            .await;
+            match result {
+                Ok(()) => {
+                    removal_timeout_streak.remove(writer_id);
+                    pool.stats.increment_pool_force_close_total();
+                    pool.stats
+                        .increment_me_draining_writers_reap_progress_total();
+                    info!(
+                        writer_id,
+                        had_clients,
+                        "Zombie writer removed by watchdog"
+                    );
+                }
+                Err(_) => {
+                    let streak = removal_timeout_streak
+                        .entry(*writer_id)
+                        .and_modify(|value| *value = value.saturating_add(1))
+                        .or_insert(1);
+                    warn!(
+                        writer_id,
+                        had_clients,
+                        timeout_streak = *streak,
+                        "Zombie writer removal timed out"
+                    );
+                    if *streak < HARD_DETACH_TIMEOUT_STREAK {
+                        continue;
+                    }
+
+                    let hard_detach = tokio::time::timeout(
+                        Duration::from_secs(REMOVE_TIMEOUT_SECS),
+                        pool.remove_draining_writer_hard_detach(*writer_id),
+                    )
+                    .await;
+                    match hard_detach {
+                        Ok(true) => {
+                            removal_timeout_streak.remove(writer_id);
+                            pool.stats.increment_pool_force_close_total();
+                            pool.stats
+                                .increment_me_draining_writers_reap_progress_total();
+                            info!(
+                                writer_id,
+                                had_clients,
+                                "Zombie writer hard-detached after repeated timeouts"
+                            );
+                        }
+                        Ok(false) => {
+                            removal_timeout_streak.remove(writer_id);
+                            debug!(
+                                writer_id,
+                                had_clients,
+                                "Zombie hard-detach skipped (writer already gone or no longer draining)"
+                            );
+                        }
+                        Err(_) => {
+                            warn!(
+                                writer_id,
+                                had_clients,
+                                "Zombie hard-detach timed out, will retry next tick"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1587,10 +1725,9 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
 
-    use super::{reap_draining_writers, recover_single_endpoint_outage};
+    use super::reap_draining_writers;
     use crate::config::{GeneralConfig, MeRouteNoWriterMode, MeSocksKdfPolicy, MeWriterPickMode};
     use crate::crypto::SecureRandom;
-    use crate::network::IpFamily;
     use crate::network::probe::NetworkDecision;
     use crate::stats::Stats;
     use crate::transport::middle_proxy::codec::WriterCommand;
@@ -1771,66 +1908,5 @@ mod tests {
         assert_eq!(pool.registry.get_writer(conn_a).await.unwrap().writer_id, 10);
         assert_eq!(pool.registry.get_writer(conn_b).await.unwrap().writer_id, 20);
         assert_eq!(pool.registry.get_writer(conn_c).await.unwrap().writer_id, 30);
-    }
-
-    #[tokio::test]
-    async fn removing_draining_writer_still_quarantines_flapping_endpoint() {
-        let pool = make_pool(1).await;
-        let now_epoch_secs = MePool::now_epoch_secs();
-        let writer_id = 11u64;
-        let writer_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4000 + writer_id as u16);
-        let conn_id =
-            insert_draining_writer(&pool, writer_id, now_epoch_secs.saturating_sub(5)).await;
-
-        assert!(pool
-            .registry
-            .evict_bound_conn_if_writer(conn_id, writer_id)
-            .await);
-        pool.remove_writer_and_close_clients(writer_id).await;
-
-        assert!(pool.is_endpoint_quarantined(writer_addr).await);
-    }
-
-    #[tokio::test]
-    async fn single_endpoint_outage_respects_quarantine_when_bypass_disabled() {
-        let pool = make_pool(1).await;
-        pool.me_single_endpoint_outage_disable_quarantine
-            .store(false, Ordering::Relaxed);
-
-        let key = (2, IpFamily::V4);
-        let endpoint = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7443);
-        let quarantine_ttl = Duration::from_millis(200);
-        {
-            let mut guard = pool.endpoint_quarantine.lock().await;
-            guard.insert(endpoint, Instant::now() + quarantine_ttl);
-        }
-
-        let rng = Arc::new(SecureRandom::new());
-        let mut outage_backoff = HashMap::new();
-        let mut outage_next_attempt = HashMap::new();
-        let mut reconnect_budget = 1usize;
-        let started_at = Instant::now();
-
-        recover_single_endpoint_outage(
-            &pool,
-            &rng,
-            key,
-            endpoint,
-            1,
-            &mut outage_backoff,
-            &mut outage_next_attempt,
-            &mut reconnect_budget,
-        )
-        .await;
-
-        assert_eq!(reconnect_budget, 1);
-        assert_eq!(
-            pool.stats
-                .get_me_single_endpoint_outage_reconnect_attempt_total(),
-            0
-        );
-        assert_eq!(pool.stats.get_me_single_endpoint_quarantine_bypass_total(), 0);
-        let next_attempt = outage_next_attempt.get(&key).copied().unwrap();
-        assert!(next_attempt >= started_at + Duration::from_millis(120));
     }
 }

@@ -49,43 +49,36 @@ impl MePool {
             return Vec::new();
         }
 
-        loop {
-            let mut guard = self.endpoint_quarantine.lock().await;
-            let now = Instant::now();
-            guard.retain(|_, expiry| *expiry > now);
+        let mut guard = self.endpoint_quarantine.lock().await;
+        let now = Instant::now();
+        guard.retain(|_, expiry| *expiry > now);
 
-            let mut ready = Vec::<SocketAddr>::with_capacity(endpoints.len());
-            let mut earliest_quarantine: Option<(SocketAddr, Instant)> = None;
-            for addr in endpoints {
-                if let Some(expiry) = guard.get(addr).copied() {
-                    match earliest_quarantine {
-                        Some((_, current_expiry)) if current_expiry <= expiry => {}
-                        _ => earliest_quarantine = Some((*addr, expiry)),
-                    }
-                } else {
-                    ready.push(*addr);
+        let mut ready = Vec::<SocketAddr>::with_capacity(endpoints.len());
+        let mut earliest_quarantine: Option<(SocketAddr, Instant)> = None;
+        for addr in endpoints {
+            if let Some(expiry) = guard.get(addr).copied() {
+                match earliest_quarantine {
+                    Some((_, current_expiry)) if current_expiry <= expiry => {}
+                    _ => earliest_quarantine = Some((*addr, expiry)),
                 }
+            } else {
+                ready.push(*addr);
             }
+        }
 
-            if !ready.is_empty() {
-                return ready;
-            }
+        if !ready.is_empty() {
+            return ready;
+        }
 
-            let Some((addr, expiry)) = earliest_quarantine else {
-                return Vec::new();
-            };
-            let remaining = expiry.saturating_duration_since(now);
-            if remaining.is_zero() {
-                return vec![addr];
-            }
-            drop(guard);
+        if let Some((addr, expiry)) = earliest_quarantine {
             debug!(
                 %addr,
-                wait_ms = remaining.as_millis(),
-                "All ME endpoints quarantined; waiting for earliest to expire"
+                wait_ms = expiry.saturating_duration_since(now).as_millis(),
+                "All ME endpoints are quarantined for the DC group; waiting for quarantine expiry"
             );
-            tokio::time::sleep(remaining).await;
         }
+
+        Vec::new()
     }
 
     pub(super) async fn has_refill_inflight_for_dc_key(&self, key: RefillDcKey) -> bool {

@@ -12,7 +12,9 @@ use super::codec::WriterCommand;
 use super::health::{health_drain_close_budget, reap_draining_writers};
 use super::pool::{MePool, MeWriter, WriterContour};
 use super::registry::ConnMeta;
-use crate::config::{GeneralConfig, MeRouteNoWriterMode, MeSocksKdfPolicy, MeWriterPickMode};
+use crate::config::{
+    GeneralConfig, MeBindStaleMode, MeRouteNoWriterMode, MeSocksKdfPolicy, MeWriterPickMode,
+};
 use crate::crypto::SecureRandom;
 use crate::network::probe::NetworkDecision;
 use crate::stats::Stats;
@@ -646,10 +648,23 @@ async fn reap_draining_writers_instadrain_removes_non_expired_writers_immediatel
 
 #[test]
 fn general_config_default_drain_threshold_remains_enabled() {
-    assert_eq!(GeneralConfig::default().me_pool_drain_threshold, 128);
+    assert_eq!(GeneralConfig::default().me_pool_drain_threshold, 32);
     assert!(GeneralConfig::default().me_pool_drain_soft_evict_enabled);
     assert_eq!(
-        GeneralConfig::default().me_pool_drain_soft_evict_per_writer,
-        1
+        GeneralConfig::default().me_pool_drain_soft_evict_grace_secs,
+        10
     );
+    assert_eq!(
+        GeneralConfig::default().me_pool_drain_soft_evict_per_writer,
+        2
+    );
+    assert_eq!(
+        GeneralConfig::default().me_pool_drain_soft_evict_budget_per_core,
+        16
+    );
+    assert_eq!(
+        GeneralConfig::default().me_pool_drain_soft_evict_cooldown_ms,
+        1000
+    );
+    assert_eq!(GeneralConfig::default().me_bind_stale_mode, MeBindStaleMode::Never);
 }

@@ -199,8 +199,14 @@ update_every = 43200
 hardswap = false
 me_pool_drain_ttl_secs = 90
 me_instadrain = false
+me_pool_drain_threshold = 32
+me_pool_drain_soft_evict_grace_secs = 10
+me_pool_drain_soft_evict_per_writer = 2
+me_pool_drain_soft_evict_budget_per_core = 16
+me_pool_drain_soft_evict_cooldown_ms = 1000
+me_bind_stale_mode = "never"
 me_pool_min_fresh_ratio = 0.8
-me_reinit_drain_timeout_secs = 120
+me_reinit_drain_timeout_secs = 90
 
 [network]
 ipv4 = true

@@ -20,13 +20,18 @@ use crate::protocol::constants::{RPC_CLOSE_EXT_U32, RPC_PING_U32};
 use super::codec::{RpcWriter, WriterCommand};
 use super::pool::{MePool, MeWriter, WriterContour};
 use super::reader::reader_loop;
-use super::registry::BoundConn;
 use super::wire::build_proxy_req_payload;
 
 const ME_ACTIVE_PING_SECS: u64 = 25;
 const ME_ACTIVE_PING_JITTER_SECS: i64 = 5;
 const ME_IDLE_KEEPALIVE_MAX_SECS: u64 = 5;
 const ME_RPC_PROXY_REQ_RESPONSE_WAIT_MS: u64 = 700;
+
+#[derive(Clone, Copy)]
+enum WriterTeardownMode {
+    Any,
+    DrainingOnly,
+}
 
 fn is_me_peer_closed_error(error: &ProxyError) -> bool {
     matches!(error, ProxyError::Io(ioe) if ioe.kind() == ErrorKind::UnexpectedEof)
@@ -142,10 +147,10 @@ impl MePool {
             seq_no: 0,
             crc_mode: hs.crc_mode,
         };
+        let cancel_wr = cancel.clone();
         let cleanup_done = Arc::new(AtomicBool::new(false));
         let cleanup_for_writer = cleanup_done.clone();
-        let pool_writer = Arc::downgrade(self);
-        let cancel_wr = cancel.clone();
+        let pool_writer_task = Arc::downgrade(self);
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -163,15 +168,14 @@ impl MePool {
                     _ = cancel_wr.cancelled() => break,
                 }
             }
-            cancel_wr.cancel();
             if cleanup_for_writer
                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
             {
-                if let Some(pool) = pool_writer.upgrade() {
+                if let Some(pool) = pool_writer_task.upgrade() {
                     pool.remove_writer_and_close_clients(writer_id).await;
                 } else {
-                    debug!(writer_id, "ME writer cleanup skipped: pool dropped");
+                    cancel_wr.cancel();
                 }
             }
         });
@@ -255,7 +259,6 @@ impl MePool {
                 stats_reader_close.increment_me_idle_close_by_peer_total();
                 info!(writer_id, "ME socket closed by peer on idle writer");
             }
-            cancel_reader_token.cancel();
             if cleanup_for_reader
                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
@@ -263,12 +266,9 @@ impl MePool {
                 if let Some(pool) = pool.upgrade() {
                     pool.remove_writer_and_close_clients(writer_id).await;
                 } else {
-                    let remaining = writers_arc.read().await.len();
-                    debug!(
-                        writer_id,
-                        remaining,
-                        "ME reader cleanup skipped: pool dropped"
-                    );
+                    // Fallback for shutdown races: make writer task exit quickly so stale
+                    // channels are observable by periodic prune.
+                    cancel_reader_token.cancel();
                 }
             }
             if let Err(e) = res {
@@ -276,6 +276,8 @@ impl MePool {
                     warn!(error = %e, "ME reader ended");
                 }
             }
+            let remaining = writers_arc.read().await.len();
+            debug!(writer_id, remaining, "ME reader task finished");
         });
 
         let pool_ping = Arc::downgrade(self);
@@ -365,13 +367,12 @@ impl MePool {
                     stats_ping.increment_me_keepalive_failed();
                     debug!("ME ping failed, removing dead writer");
                     cancel_ping.cancel();
-                    if cleanup_for_ping
-                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
-                        .is_ok()
+                    if let Some(pool) = pool_ping.upgrade()
+                        && cleanup_for_ping
+                            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                            .is_ok()
                     {
-                        if let Some(pool) = pool_ping.upgrade() {
-                            pool.remove_writer_and_close_clients(writer_id).await;
-                        }
+                        pool.remove_writer_and_close_clients(writer_id).await;
                     }
                     break;
                 }
@@ -514,18 +515,49 @@ impl MePool {
     pub(crate) async fn remove_writer_and_close_clients(self: &Arc<Self>, writer_id: u64) {
         // Full client cleanup now happens inside `registry.writer_lost` to keep
         // writer reap/remove paths strictly non-blocking per connection.
-        let _ = self.remove_writer_only(writer_id).await;
+        let _ = self
+            .remove_writer_with_mode(writer_id, WriterTeardownMode::Any)
+            .await;
     }
 
-    async fn remove_writer_only(self: &Arc<Self>, writer_id: u64) -> Vec<BoundConn> {
+    pub(super) async fn remove_draining_writer_hard_detach(
+        self: &Arc<Self>,
+        writer_id: u64,
+    ) -> bool {
+        self.remove_writer_with_mode(writer_id, WriterTeardownMode::DrainingOnly)
+            .await
+    }
+
+    async fn remove_writer_only(self: &Arc<Self>, writer_id: u64) -> bool {
+        self.remove_writer_with_mode(writer_id, WriterTeardownMode::Any)
+            .await
+    }
+
+    // Authoritative teardown primitive shared by normal cleanup and watchdog path.
+    // Lock-order invariant:
+    // 1) mutate `writers` under pool write lock,
+    // 2) release pool lock,
+    // 3) run registry/metrics/refill side effects.
+    // `registry.writer_lost` must never run while `writers` lock is held.
+    async fn remove_writer_with_mode(
+        self: &Arc<Self>,
+        writer_id: u64,
+        mode: WriterTeardownMode,
+    ) -> bool {
         let mut close_tx: Option<mpsc::Sender<WriterCommand>> = None;
         let mut removed_addr: Option<SocketAddr> = None;
         let mut removed_dc: Option<i32> = None;
         let mut removed_uptime: Option<Duration> = None;
         let mut trigger_refill = false;
+        let mut removed = false;
         {
             let mut ws = self.writers.write().await;
             if let Some(pos) = ws.iter().position(|w| w.id == writer_id) {
+                if matches!(mode, WriterTeardownMode::DrainingOnly)
+                    && !ws[pos].draining.load(Ordering::Relaxed)
+                {
+                    return false;
+                }
                 let w = ws.remove(pos);
                 let was_draining = w.draining.load(Ordering::Relaxed);
                 if was_draining {
@@ -542,6 +574,7 @@ impl MePool {
                 }
                 close_tx = Some(w.tx.clone());
                 self.conn_count.fetch_sub(1, Ordering::Relaxed);
+                removed = true;
             }
         }
         // State invariant:
@@ -549,7 +582,7 @@ impl MePool {
         // - writer is removed from registry routing/binding maps via `writer_lost`.
         // The close command below is only a best-effort accelerator for task shutdown.
         // Cleanup progress must never depend on command-channel availability.
-        let conns = self.registry.writer_lost(writer_id).await;
+        let _ = self.registry.writer_lost(writer_id).await;
         {
             let mut tracker = self.ping_tracker.lock().await;
             tracker.retain(|_, (_, wid)| *wid != writer_id);
@@ -576,22 +609,17 @@ impl MePool {
                 }
             }
         }
-        // Quarantine flapping endpoints regardless of draining state —
-        // a rapidly dying endpoint is unstable whether it was draining or not.
         if let Some(addr) = removed_addr {
             if let Some(uptime) = removed_uptime {
                 self.maybe_quarantine_flapping_endpoint(addr, uptime).await;
             }
+            if trigger_refill
+                && let Some(writer_dc) = removed_dc
+            {
+                self.trigger_immediate_refill_for_dc(addr, writer_dc);
+            }
         }
-        // Only trigger immediate refill for unexpected (non-draining) removals.
-        // Draining writers are intentionally being retired.
-        if trigger_refill
-            && let Some(addr) = removed_addr
-            && let Some(writer_dc) = removed_dc
-        {
-            self.trigger_immediate_refill_for_dc(addr, writer_dc);
-        }
-        conns
+        removed
     }
 
     pub(crate) async fn mark_writer_draining_with_timeout(

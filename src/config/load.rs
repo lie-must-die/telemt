@@ -2038,6 +2038,45 @@ mod tests {
     }
 
     #[test]
+    fn force_close_default_matches_drain_ttl() {
+        let toml = r#"
+            [censorship]
+            tls_domain = "example.com"
+
+            [access.users]
+            user = "00000000000000000000000000000000"
+        "#;
+        let dir = std::env::temp_dir();
+        let path = dir.join("telemt_force_close_default_test.toml");
+        std::fs::write(&path, toml).unwrap();
+        let cfg = ProxyConfig::load(&path).unwrap();
+        assert_eq!(cfg.general.me_reinit_drain_timeout_secs, 90);
+        assert_eq!(cfg.general.effective_me_pool_force_close_secs(), 90);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn force_close_zero_uses_runtime_safety_fallback() {
+        let toml = r#"
+            [general]
+            me_reinit_drain_timeout_secs = 0
+
+            [censorship]
+            tls_domain = "example.com"
+
+            [access.users]
+            user = "00000000000000000000000000000000"
+        "#;
+        let dir = std::env::temp_dir();
+        let path = dir.join("telemt_force_close_zero_fallback_test.toml");
+        std::fs::write(&path, toml).unwrap();
+        let cfg = ProxyConfig::load(&path).unwrap();
+        assert_eq!(cfg.general.me_reinit_drain_timeout_secs, 0);
+        assert_eq!(cfg.general.effective_me_pool_force_close_secs(), 300);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn force_close_bumped_when_below_drain_ttl() {
         let toml = r#"
             [general]

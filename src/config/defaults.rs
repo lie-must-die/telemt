@@ -515,7 +515,7 @@ pub(crate) fn default_alpn_enforce() -> bool {
 }
 
 pub(crate) fn default_mask_shape_hardening() -> bool {
-    false
+    true
 }
 
 pub(crate) fn default_mask_shape_bucket_floor_bytes() -> usize {
@@ -524,6 +524,26 @@ pub(crate) fn default_mask_shape_bucket_floor_bytes() -> usize {
 
 pub(crate) fn default_mask_shape_bucket_cap_bytes() -> usize {
     4096
+}
+
+pub(crate) fn default_mask_shape_above_cap_blur() -> bool {
+    false
+}
+
+pub(crate) fn default_mask_shape_above_cap_blur_max_bytes() -> usize {
+    512
+}
+
+pub(crate) fn default_mask_timing_normalization_enabled() -> bool {
+    false
+}
+
+pub(crate) fn default_mask_timing_normalization_floor_ms() -> u64 {
+    0
+}
+
+pub(crate) fn default_mask_timing_normalization_ceiling_ms() -> u64 {
+    0
 }
 
 pub(crate) fn default_stun_servers() -> Vec<String> {

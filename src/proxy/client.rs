@@ -1261,3 +1261,15 @@ mod masking_diagnostics_security_tests;
 #[cfg(test)]
 #[path = "tests/client_masking_shape_hardening_security_tests.rs"]
 mod masking_shape_hardening_security_tests;
+
+#[cfg(test)]
+#[path = "tests/client_masking_shape_hardening_adversarial_tests.rs"]
+mod masking_shape_hardening_adversarial_tests;
+
+#[cfg(test)]
+#[path = "tests/client_masking_shape_hardening_redteam_expected_fail_tests.rs"]
+mod masking_shape_hardening_redteam_expected_fail_tests;
+
+#[cfg(test)]
+#[path = "tests/client_masking_shape_classifier_fuzz_redteam_expected_fail_tests.rs"]
+mod masking_shape_classifier_fuzz_redteam_expected_fail_tests;

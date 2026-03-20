@@ -1425,6 +1425,27 @@ pub struct AntiCensorshipConfig {
     /// Maximum bucket size for mask shape hardening padding.
     #[serde(default = "default_mask_shape_bucket_cap_bytes")]
     pub mask_shape_bucket_cap_bytes: usize,
+
+    /// Add bounded random tail bytes even when total bytes already exceed
+    /// mask_shape_bucket_cap_bytes.
+    #[serde(default = "default_mask_shape_above_cap_blur")]
+    pub mask_shape_above_cap_blur: bool,
+
+    /// Maximum random bytes appended above cap when above-cap blur is enabled.
+    #[serde(default = "default_mask_shape_above_cap_blur_max_bytes")]
+    pub mask_shape_above_cap_blur_max_bytes: usize,
+
+    /// Enable outcome-time normalization envelope for masking fallback.
+    #[serde(default = "default_mask_timing_normalization_enabled")]
+    pub mask_timing_normalization_enabled: bool,
+
+    /// Lower bound (ms) for masking outcome timing envelope.
+    #[serde(default = "default_mask_timing_normalization_floor_ms")]
+    pub mask_timing_normalization_floor_ms: u64,
+
+    /// Upper bound (ms) for masking outcome timing envelope.
+    #[serde(default = "default_mask_timing_normalization_ceiling_ms")]
+    pub mask_timing_normalization_ceiling_ms: u64,
 }
 
 impl Default for AntiCensorshipConfig {
@@ -1449,6 +1470,11 @@ impl Default for AntiCensorshipConfig {
             mask_shape_hardening: default_mask_shape_hardening(),
             mask_shape_bucket_floor_bytes: default_mask_shape_bucket_floor_bytes(),
             mask_shape_bucket_cap_bytes: default_mask_shape_bucket_cap_bytes(),
+            mask_shape_above_cap_blur: default_mask_shape_above_cap_blur(),
+            mask_shape_above_cap_blur_max_bytes: default_mask_shape_above_cap_blur_max_bytes(),
+            mask_timing_normalization_enabled: default_mask_timing_normalization_enabled(),
+            mask_timing_normalization_floor_ms: default_mask_timing_normalization_floor_ms(),
+            mask_timing_normalization_ceiling_ms: default_mask_timing_normalization_ceiling_ms(),
         }
     }
 }

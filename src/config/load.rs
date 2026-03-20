@@ -384,6 +384,71 @@ impl ProxyConfig {
             ));
         }
 
+        if config.censorship.mask_shape_bucket_floor_bytes == 0 {
+            return Err(ProxyError::Config(
+                "censorship.mask_shape_bucket_floor_bytes must be > 0".to_string(),
+            ));
+        }
+
+        if config.censorship.mask_shape_bucket_cap_bytes
+            < config.censorship.mask_shape_bucket_floor_bytes
+        {
+            return Err(ProxyError::Config(
+                "censorship.mask_shape_bucket_cap_bytes must be >= censorship.mask_shape_bucket_floor_bytes"
+                    .to_string(),
+            ));
+        }
+
+        if config.censorship.mask_shape_above_cap_blur
+            && !config.censorship.mask_shape_hardening
+        {
+            return Err(ProxyError::Config(
+                "censorship.mask_shape_above_cap_blur requires censorship.mask_shape_hardening = true"
+                    .to_string(),
+            ));
+        }
+
+        if config.censorship.mask_shape_above_cap_blur
+            && config.censorship.mask_shape_above_cap_blur_max_bytes == 0
+        {
+            return Err(ProxyError::Config(
+                "censorship.mask_shape_above_cap_blur_max_bytes must be > 0 when censorship.mask_shape_above_cap_blur is enabled"
+                    .to_string(),
+            ));
+        }
+
+        if config.censorship.mask_shape_above_cap_blur_max_bytes > 1_048_576 {
+            return Err(ProxyError::Config(
+                "censorship.mask_shape_above_cap_blur_max_bytes must be <= 1048576"
+                    .to_string(),
+            ));
+        }
+
+        if config.censorship.mask_timing_normalization_ceiling_ms
+            < config.censorship.mask_timing_normalization_floor_ms
+        {
+            return Err(ProxyError::Config(
+                "censorship.mask_timing_normalization_ceiling_ms must be >= censorship.mask_timing_normalization_floor_ms"
+                    .to_string(),
+            ));
+        }
+
+        if config.censorship.mask_timing_normalization_enabled
+            && config.censorship.mask_timing_normalization_floor_ms == 0
+        {
+            return Err(ProxyError::Config(
+                "censorship.mask_timing_normalization_floor_ms must be > 0 when censorship.mask_timing_normalization_enabled is true"
+                    .to_string(),
+            ));
+        }
+
+        if config.censorship.mask_timing_normalization_ceiling_ms > 60_000 {
+            return Err(ProxyError::Config(
+                "censorship.mask_timing_normalization_ceiling_ms must be <= 60000"
+                    .to_string(),
+            ));
+        }
+
         if config.timeouts.relay_client_idle_soft_secs == 0 {
             return Err(ProxyError::Config(
                 "timeouts.relay_client_idle_soft_secs must be > 0".to_string(),
@@ -1043,6 +1108,10 @@ mod load_idle_policy_tests;
 #[cfg(test)]
 #[path = "tests/load_security_tests.rs"]
 mod load_security_tests;
+
+#[cfg(test)]
+#[path = "tests/load_mask_shape_security_tests.rs"]
+mod load_mask_shape_security_tests;
 
 #[cfg(test)]
 mod tests {

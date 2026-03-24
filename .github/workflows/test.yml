@@ -34,7 +34,7 @@ jobs:
       - run: cargo fmt -- --check
 
 # ==========================
-# Tests
+# Test
 # ==========================
   test:
     name: Test
@@ -61,7 +61,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - run: cargo test --verbose
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Build tests
+        run: cargo test --no-run -j $(nproc)
+
+      - name: Run tests
+        run: cargo nextest run --all-features --no-fail-fast
 
 # ==========================
 # Clippy
@@ -92,7 +99,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - run: cargo clippy -- --cap-lints warn
+      - run: cargo clippy -j $(nproc) -- --cap-lints warn
 
 # ==========================
 # Udeps
@@ -123,5 +130,4 @@ jobs:
       - name: Install cargo-udeps
         run: cargo install cargo-udeps || true
 
-      # тоже не валит билд
       - run: cargo udeps || true

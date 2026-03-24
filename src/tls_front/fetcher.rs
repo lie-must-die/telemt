@@ -241,7 +241,10 @@ fn order_profiles(
             return ordered;
         }
 
-        if let Some(pos) = ordered.iter().position(|profile| *profile == cached.profile) {
+        if let Some(pos) = ordered
+            .iter()
+            .position(|profile| *profile == cached.profile)
+        {
             if pos != 0 {
                 ordered.swap(0, pos);
             }
@@ -951,15 +954,9 @@ async fn fetch_via_raw_tls(
     #[cfg(not(unix))]
     let _ = unix_sock;
 
-    let stream = connect_tcp_with_upstream(
-        host,
-        port,
-        connect_timeout,
-        upstream,
-        scope,
-        strict_route,
-    )
-    .await?;
+    let stream =
+        connect_tcp_with_upstream(host, port, connect_timeout, upstream, scope, strict_route)
+            .await?;
     fetch_via_raw_tls_stream(
         stream,
         sni,
@@ -1109,15 +1106,9 @@ async fn fetch_via_rustls(
     #[cfg(not(unix))]
     let _ = unix_sock;
 
-    let stream = connect_tcp_with_upstream(
-        host,
-        port,
-        connect_timeout,
-        upstream,
-        scope,
-        strict_route,
-    )
-    .await?;
+    let stream =
+        connect_tcp_with_upstream(host, port, connect_timeout, upstream, scope, strict_route)
+            .await?;
     fetch_via_rustls_stream(stream, host, sni, proxy_protocol).await
 }
 
@@ -1215,7 +1206,9 @@ pub async fn fetch_real_tls_with_strategy(
     if elapsed >= total_budget {
         return match raw_result {
             Some(raw) => Ok(raw),
-            None => Err(raw_last_error.unwrap_or_else(|| anyhow!("TLS fetch total budget exhausted"))),
+            None => {
+                Err(raw_last_error.unwrap_or_else(|| anyhow!("TLS fetch total budget exhausted")))
+            }
         };
     }
 
@@ -1250,9 +1243,7 @@ pub async fn fetch_real_tls_with_strategy(
                 warn!(sni = %sni, error = %err, "Rustls cert fetch failed, using raw TLS metadata only");
                 Ok(raw)
             } else if let Some(raw_err) = raw_last_error {
-                Err(anyhow!(
-                    "TLS fetch failed (raw: {raw_err}; rustls: {err})"
-                ))
+                Err(anyhow!("TLS fetch failed (raw: {raw_err}; rustls: {err})"))
             } else {
                 Err(err)
             }
@@ -1386,7 +1377,10 @@ mod tests {
     #[test]
     fn test_order_profiles_drops_expired_cached_winner() {
         let strategy = TlsFetchStrategy {
-            profiles: vec![TlsFetchProfile::ModernFirefoxLike, TlsFetchProfile::CompatTls12],
+            profiles: vec![
+                TlsFetchProfile::ModernFirefoxLike,
+                TlsFetchProfile::CompatTls12,
+            ],
             strict_route: true,
             attempt_timeout: Duration::from_secs(1),
             total_budget: Duration::from_secs(2),
@@ -1394,7 +1388,8 @@ mod tests {
             deterministic: false,
             profile_cache_ttl: Duration::from_secs(5),
         };
-        let cache_key = profile_cache_key("mask2.example", 443, "tls2.example", None, None, 0, None);
+        let cache_key =
+            profile_cache_key("mask2.example", 443, "tls2.example", None, None, 0, None);
         profile_cache().remove(&cache_key);
         profile_cache().insert(
             cache_key.clone(),

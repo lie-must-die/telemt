@@ -27,7 +27,10 @@ pub(crate) struct HttpsGetResponse {
 fn build_tls_client_config() -> Arc<rustls::ClientConfig> {
     let mut root_store = rustls::RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = rustls::ClientConfig::builder()
+    let provider = rustls::crypto::ring::default_provider();
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+        .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
+        .expect("HTTPS fetch rustls protocol versions must be valid")
         .with_root_certificates(root_store)
         .with_no_client_auth();
     Arc::new(config)

@@ -282,30 +282,9 @@ fn auth_probe_record_failure_with_state(
             let mut eviction_candidate: Option<(IpAddr, u32, Instant)> = None;
             let state_len = state.len();
             let scan_limit = state_len.min(AUTH_PROBE_PRUNE_SCAN_LIMIT);
-            let start_offset = auth_probe_scan_start_offset(peer_ip, now, state_len, scan_limit);
 
-            let mut scanned = 0usize;
-            for entry in state.iter().skip(start_offset) {
-                let key = *entry.key();
-                let fail_streak = entry.value().fail_streak;
-                let last_seen = entry.value().last_seen;
-                match eviction_candidate {
-                    Some((_, current_fail, current_seen))
-                        if fail_streak > current_fail
-                            || (fail_streak == current_fail && last_seen >= current_seen) => {}
-                    _ => eviction_candidate = Some((key, fail_streak, last_seen)),
-                }
-                if auth_probe_state_expired(entry.value(), now) {
-                    stale_keys.push(key);
-                }
-                scanned += 1;
-                if scanned >= scan_limit {
-                    break;
-                }
-            }
-
-            if scanned < scan_limit {
-                for entry in state.iter().take(scan_limit - scanned) {
+            if state_len <= AUTH_PROBE_PRUNE_SCAN_LIMIT {
+                for entry in state.iter() {
                     let key = *entry.key();
                     let fail_streak = entry.value().fail_streak;
                     let last_seen = entry.value().last_seen;
@@ -317,6 +296,46 @@ fn auth_probe_record_failure_with_state(
                     }
                     if auth_probe_state_expired(entry.value(), now) {
                         stale_keys.push(key);
+                    }
+                }
+            } else {
+                let start_offset =
+                    auth_probe_scan_start_offset(peer_ip, now, state_len, scan_limit);
+                let mut scanned = 0usize;
+                for entry in state.iter().skip(start_offset) {
+                    let key = *entry.key();
+                    let fail_streak = entry.value().fail_streak;
+                    let last_seen = entry.value().last_seen;
+                    match eviction_candidate {
+                        Some((_, current_fail, current_seen))
+                            if fail_streak > current_fail
+                                || (fail_streak == current_fail && last_seen >= current_seen) => {}
+                        _ => eviction_candidate = Some((key, fail_streak, last_seen)),
+                    }
+                    if auth_probe_state_expired(entry.value(), now) {
+                        stale_keys.push(key);
+                    }
+                    scanned += 1;
+                    if scanned >= scan_limit {
+                        break;
+                    }
+                }
+
+                if scanned < scan_limit {
+                    for entry in state.iter().take(scan_limit - scanned) {
+                        let key = *entry.key();
+                        let fail_streak = entry.value().fail_streak;
+                        let last_seen = entry.value().last_seen;
+                        match eviction_candidate {
+                            Some((_, current_fail, current_seen))
+                                if fail_streak > current_fail
+                                    || (fail_streak == current_fail
+                                        && last_seen >= current_seen) => {}
+                            _ => eviction_candidate = Some((key, fail_streak, last_seen)),
+                        }
+                        if auth_probe_state_expired(entry.value(), now) {
+                            stale_keys.push(key);
+                        }
                     }
                 }
             }
@@ -608,11 +627,35 @@ where
     }
 
     let client_sni = tls::extract_sni_from_client_hello(handshake);
+    let preferred_user_hint = client_sni
+        .as_deref()
+        .filter(|sni| config.access.users.contains_key(*sni));
     let matched_tls_domain = client_sni
         .as_deref()
         .and_then(|sni| find_matching_tls_domain(config, sni));
 
-    if client_sni.is_some() && matched_tls_domain.is_none() {
+    let alpn_list = if config.censorship.alpn_enforce {
+        tls::extract_alpn_from_client_hello(handshake)
+    } else {
+        Vec::new()
+    };
+    let selected_alpn = if config.censorship.alpn_enforce {
+        if alpn_list.iter().any(|p| p == b"h2") {
+            Some(b"h2".to_vec())
+        } else if alpn_list.iter().any(|p| p == b"http/1.1") {
+            Some(b"http/1.1".to_vec())
+        } else if !alpn_list.is_empty() {
+            maybe_apply_server_hello_delay(config).await;
+            debug!(peer = %peer, "Client ALPN list has no supported protocol; using masking fallback");
+            return HandshakeResult::BadClient { reader, writer };
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if client_sni.is_some() && matched_tls_domain.is_none() && preferred_user_hint.is_none() {
         auth_probe_record_failure(peer.ip(), Instant::now());
         maybe_apply_server_hello_delay(config).await;
         debug!(
@@ -627,7 +670,7 @@ where
         };
     }
 
-    let secrets = decode_user_secrets(config, client_sni.as_deref());
+    let secrets = decode_user_secrets(config, preferred_user_hint);
 
     let validation = match tls::validate_tls_handshake_with_replay_window(
         handshake,
@@ -677,27 +720,6 @@ where
                 )
                 .await;
             Some((cached_entry, use_full_cert_payload))
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let alpn_list = if config.censorship.alpn_enforce {
-        tls::extract_alpn_from_client_hello(handshake)
-    } else {
-        Vec::new()
-    };
-    let selected_alpn = if config.censorship.alpn_enforce {
-        if alpn_list.iter().any(|p| p == b"h2") {
-            Some(b"h2".to_vec())
-        } else if alpn_list.iter().any(|p| p == b"http/1.1") {
-            Some(b"http/1.1".to_vec())
-        } else if !alpn_list.is_empty() {
-            maybe_apply_server_hello_delay(config).await;
-            debug!(peer = %peer, "Client ALPN list has no supported protocol; using masking fallback");
-            return HandshakeResult::BadClient { reader, writer };
         } else {
             None
         }

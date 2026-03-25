@@ -63,9 +63,12 @@ user3 = "00000000000000000000000000000003"
 curl -s http://127.0.0.1:9091/v1/users | jq
 ```
 
+## "Unknown TLS SNI" Error
+You probably updated tls_domain, but users are still connecting via old links with the previous domain.
+
 ## How to view metrics
 
-1. Open the config `nano /etc/telemt.toml`
+1. Open the config `nano /etc/telemt/telemt.toml`
 2. Add the following parameters
 ```toml
 [server]

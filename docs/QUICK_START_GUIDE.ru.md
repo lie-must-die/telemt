@@ -128,8 +128,8 @@ WorkingDirectory=/opt/telemt
 ExecStart=/bin/telemt /etc/telemt/telemt.toml
 Restart=on-failure
 LimitNOFILE=65536
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
 
 [Install]

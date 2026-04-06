@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::collections::hash_map::RandomState;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -10,6 +10,8 @@ use tokio::sync::mpsc;
 
 use crate::proxy::handshake::{AuthProbeSaturationState, AuthProbeState};
 use crate::proxy::middle_relay::{DesyncDedupRotationState, RelayIdleCandidateRegistry};
+
+const HANDSHAKE_RECENT_USER_RING_LEN: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConntrackCloseReason {
@@ -41,6 +43,13 @@ pub(crate) struct HandshakeSharedState {
     pub(crate) auth_probe_eviction_hasher: RandomState,
     pub(crate) invalid_secret_warned: Mutex<HashSet<(String, String)>>,
     pub(crate) unknown_sni_warn_next_allowed: Mutex<Option<Instant>>,
+    pub(crate) sticky_user_by_ip: DashMap<IpAddr, u32>,
+    pub(crate) sticky_user_by_ip_prefix: DashMap<u64, u32>,
+    pub(crate) sticky_user_by_sni_hash: DashMap<u64, u32>,
+    pub(crate) recent_user_ring: Box<[AtomicU32]>,
+    pub(crate) recent_user_ring_seq: AtomicU64,
+    pub(crate) auth_expensive_checks_total: AtomicU64,
+    pub(crate) auth_budget_exhausted_total: AtomicU64,
 }
 
 pub(crate) struct MiddleRelaySharedState {
@@ -69,6 +78,16 @@ impl ProxySharedState {
                 auth_probe_eviction_hasher: RandomState::new(),
                 invalid_secret_warned: Mutex::new(HashSet::new()),
                 unknown_sni_warn_next_allowed: Mutex::new(None),
+                sticky_user_by_ip: DashMap::new(),
+                sticky_user_by_ip_prefix: DashMap::new(),
+                sticky_user_by_sni_hash: DashMap::new(),
+                recent_user_ring: std::iter::repeat_with(|| AtomicU32::new(0))
+                    .take(HANDSHAKE_RECENT_USER_RING_LEN)
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+                recent_user_ring_seq: AtomicU64::new(0),
+                auth_expensive_checks_total: AtomicU64::new(0),
+                auth_budget_exhausted_total: AtomicU64::new(0),
             },
             middle_relay: MiddleRelaySharedState {
                 desync_dedup: DashMap::new(),

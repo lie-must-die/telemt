@@ -4,6 +4,7 @@ use dashmap::DashMap;
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Barrier;
@@ -1088,6 +1089,172 @@ async fn tls_missing_sni_keeps_legacy_auth_path() {
     .await;
 
     assert!(matches!(result, HandshakeResult::Success(_)));
+}
+
+#[tokio::test]
+async fn tls_runtime_snapshot_updates_sticky_and_recent_hints() {
+    let secret = [0x5Au8; 16];
+    let mut config = test_config_with_secret_hex("5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a");
+    config.rebuild_runtime_user_auth().unwrap();
+
+    let replay_checker = ReplayChecker::new(128, Duration::from_secs(60));
+    let rng = SecureRandom::new();
+    let shared = ProxySharedState::new();
+    let peer: SocketAddr = "198.51.100.212:44326".parse().unwrap();
+    let handshake = make_valid_tls_client_hello_with_sni_and_alpn(&secret, 0, "user", &[b"h2"]);
+
+    let result = handle_tls_handshake_with_shared(
+        &handshake,
+        tokio::io::empty(),
+        tokio::io::sink(),
+        peer,
+        &config,
+        &replay_checker,
+        &rng,
+        None,
+        shared.as_ref(),
+    )
+    .await;
+
+    assert!(matches!(result, HandshakeResult::Success(_)));
+    assert_eq!(
+        shared
+            .handshake
+            .sticky_user_by_ip
+            .get(&peer.ip())
+            .map(|entry| *entry),
+        Some(0),
+        "successful runtime-snapshot auth must seed sticky ip cache"
+    );
+    assert_eq!(
+        shared
+            .handshake
+            .sticky_user_by_ip_prefix
+            .len(),
+        1,
+        "successful runtime-snapshot auth must seed sticky prefix cache"
+    );
+    assert!(
+        shared
+            .handshake
+            .auth_expensive_checks_total
+            .load(Ordering::Relaxed)
+            >= 1,
+        "runtime-snapshot path must account expensive candidate checks"
+    );
+}
+
+#[tokio::test]
+async fn tls_overload_budget_limits_candidate_scan_depth() {
+    let mut config = ProxyConfig::default();
+    config.access.users.clear();
+    config.access.ignore_time_skew = true;
+    for idx in 0..32u8 {
+        config
+            .access
+            .users
+            .insert(format!("user-{idx}"), format!("{:032x}", u128::from(idx) + 1));
+    }
+    config.rebuild_runtime_user_auth().unwrap();
+
+    let replay_checker = ReplayChecker::new(128, Duration::from_secs(60));
+    let rng = SecureRandom::new();
+    let shared = ProxySharedState::new();
+    let now = Instant::now();
+    {
+        let mut saturation = shared.handshake.auth_probe_saturation.lock().unwrap();
+        *saturation = Some(AuthProbeSaturationState {
+            fail_streak: AUTH_PROBE_BACKOFF_START_FAILS,
+            blocked_until: now + Duration::from_millis(200),
+            last_seen: now,
+        });
+    }
+
+    let peer: SocketAddr = "198.51.100.213:44326".parse().unwrap();
+    let attacker_secret = [0xEFu8; 16];
+    let handshake = make_valid_tls_handshake(&attacker_secret, 0);
+
+    let result = handle_tls_handshake_with_shared(
+        &handshake,
+        tokio::io::empty(),
+        tokio::io::sink(),
+        peer,
+        &config,
+        &replay_checker,
+        &rng,
+        None,
+        shared.as_ref(),
+    )
+    .await;
+
+    assert!(matches!(result, HandshakeResult::BadClient { .. }));
+    assert_eq!(
+        shared
+            .handshake
+            .auth_budget_exhausted_total
+            .load(Ordering::Relaxed),
+        1,
+        "overload mode must account budget exhaustion when scan is capped"
+    );
+    assert_eq!(
+        shared
+            .handshake
+            .auth_expensive_checks_total
+            .load(Ordering::Relaxed),
+        OVERLOAD_CANDIDATE_BUDGET_UNHINTED as u64,
+        "overload scan depth must stay within capped candidate budget"
+    );
+}
+
+#[tokio::test]
+async fn mtproto_runtime_snapshot_prefers_preferred_user_hint() {
+    let mut config = ProxyConfig::default();
+    config.access.users.clear();
+    config.access.ignore_time_skew = true;
+    config.access.users.insert(
+        "alpha".to_string(),
+        "11111111111111111111111111111111".to_string(),
+    );
+    config.access.users.insert(
+        "beta".to_string(),
+        "22222222222222222222222222222222".to_string(),
+    );
+    config.rebuild_runtime_user_auth().unwrap();
+
+    let handshake =
+        make_valid_mtproto_handshake("22222222222222222222222222222222", ProtoTag::Secure, 2);
+    let replay_checker = ReplayChecker::new(128, Duration::from_secs(60));
+    let peer: SocketAddr = "198.51.100.214:44326".parse().unwrap();
+    let shared = ProxySharedState::new();
+
+    let result = handle_mtproto_handshake_with_shared(
+        &handshake,
+        tokio::io::empty(),
+        tokio::io::sink(),
+        peer,
+        &config,
+        &replay_checker,
+        false,
+        Some("beta"),
+        shared.as_ref(),
+    )
+    .await;
+
+    match result {
+        HandshakeResult::Success((_, _, success)) => {
+            assert_eq!(success.user, "beta");
+        }
+        _ => panic!("mtproto runtime snapshot auth must succeed for preferred user"),
+    }
+
+    assert_eq!(
+        shared
+            .handshake
+            .auth_expensive_checks_total
+            .load(Ordering::Relaxed),
+        1,
+        "preferred user hint must produce single-candidate success in snapshot path"
+    );
 }
 
 #[tokio::test]

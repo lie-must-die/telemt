@@ -540,6 +540,10 @@ fn overlay_hot_fields(old: &ProxyConfig, new: &ProxyConfig) -> ProxyConfig {
     cfg.access.user_max_unique_ips_mode = new.access.user_max_unique_ips_mode;
     cfg.access.user_max_unique_ips_window_secs = new.access.user_max_unique_ips_window_secs;
 
+    if cfg.rebuild_runtime_user_auth().is_err() {
+        cfg.runtime_user_auth = None;
+    }
+
     cfg
 }
 

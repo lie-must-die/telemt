@@ -1674,7 +1674,16 @@ impl MePool {
                     let active_for_dc = {
                         let ws = self.writers.read().await;
                         ws.iter()
-                            .filter(|w| !w.draining.load(std::sync::atomic::Ordering::Relaxed) && w.writer_dc == writer_dc)
+                            .filter(|w| {
+                                !w.draining.load(std::sync::atomic::Ordering::Relaxed)
+                                    && w.writer_dc == writer_dc
+                                    && matches!(
+                                        WriterContour::from_u8(
+                                            w.contour.load(std::sync::atomic::Ordering::Relaxed),
+                                        ),
+                                        WriterContour::Active
+                                    )
+                            })
                             .count()
                     };
                     if active_for_dc < base_req {

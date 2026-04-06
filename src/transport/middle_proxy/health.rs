@@ -67,10 +67,8 @@ struct FamilyReconnectOutcome {
     key: (i32, IpFamily),
     dc: i32,
     family: IpFamily,
-    alive: usize,
     required: usize,
     endpoint_count: usize,
-    restored: usize,
 }
 
 pub async fn me_health_monitor(pool: Arc<MePool>, rng: Arc<SecureRandom>, _min_connections: usize) {
@@ -638,6 +636,7 @@ async fn check_family(
                         break;
                     }
                 }
+                pool_for_reconnect.stats.increment_me_reconnect_attempt();
                 let res = tokio::time::timeout(
                     pool_for_reconnect.reconnect_runtime.me_one_timeout,
                     pool_for_reconnect.connect_endpoints_round_robin(
@@ -653,11 +652,9 @@ async fn check_family(
                         pool_for_reconnect.stats.increment_me_reconnect_success();
                     }
                     Ok(false) => {
-                        pool_for_reconnect.stats.increment_me_reconnect_attempt();
                         debug!(dc = %dc, ?family, "ME round-robin reconnect failed")
                     }
                     Err(_) => {
-                        pool_for_reconnect.stats.increment_me_reconnect_attempt();
                         debug!(dc = %dc, ?family, "ME reconnect timed out");
                     }
                 }
@@ -668,10 +665,8 @@ async fn check_family(
                 key,
                 dc,
                 family,
-                alive,
                 required,
                 endpoint_count: endpoints_for_dc.len(),
-                restored,
             }
         });
     }
@@ -685,7 +680,7 @@ async fn check_family(
             }
         };
         let now = Instant::now();
-        let now_alive = outcome.alive + outcome.restored;
+        let now_alive = live_active_writers_for_dc_family(pool, outcome.dc, outcome.family).await;
         if now_alive >= outcome.required {
             info!(
                 dc = %outcome.dc,
@@ -839,6 +834,33 @@ fn should_emit_rate_limited_warn(
         return true;
     }
     false
+}
+
+async fn live_active_writers_for_dc_family(pool: &Arc<MePool>, dc: i32, family: IpFamily) -> usize {
+    let writers = pool.writers.read().await;
+    writers
+        .iter()
+        .filter(|writer| {
+            if writer.draining.load(std::sync::atomic::Ordering::Relaxed) {
+                return false;
+            }
+            if writer.writer_dc != dc {
+                return false;
+            }
+            if !matches!(
+                super::pool::WriterContour::from_u8(
+                    writer.contour.load(std::sync::atomic::Ordering::Relaxed),
+                ),
+                super::pool::WriterContour::Active
+            ) {
+                return false;
+            }
+            match family {
+                IpFamily::V4 => writer.addr.is_ipv4(),
+                IpFamily::V6 => writer.addr.is_ipv6(),
+            }
+        })
+        .count()
 }
 
 fn adaptive_floor_class_min(
@@ -1304,6 +1326,7 @@ async fn recover_single_endpoint_outage(
         );
         return;
     };
+    pool.stats.increment_me_reconnect_attempt();
     pool.stats
         .increment_me_single_endpoint_outage_reconnect_attempt_total();
 
@@ -1379,7 +1402,6 @@ async fn recover_single_endpoint_outage(
         return;
     }
 
-    pool.stats.increment_me_reconnect_attempt();
     let current_ms = *outage_backoff.get(&key).unwrap_or(&min_backoff_ms);
     let next_ms = current_ms.saturating_mul(2).min(max_backoff_ms);
     outage_backoff.insert(key, next_ms);

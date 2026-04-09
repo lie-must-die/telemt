@@ -16,7 +16,7 @@
 
 **Telemt** is a fast, secure, and feature-rich server written in Rust: it fully implements the official Telegram proxy algo and adds many production-ready improvements
 
-### One-command Install and Update / Команда для установки и обновления в одно касание
+### One-command Install and Update
 ```bash
 curl -fsSL https://raw.githubusercontent.com/telemt/telemt/main/install.sh | sh
 ```

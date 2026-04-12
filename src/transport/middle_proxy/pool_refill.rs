@@ -77,6 +77,12 @@ impl MePool {
             return Vec::new();
         }
 
+        if endpoints.len() == 1 && self.single_endpoint_outage_disable_quarantine() {
+            let mut guard = self.endpoint_quarantine.lock().await;
+            guard.retain(|_, expiry| *expiry > Instant::now());
+            return endpoints.to_vec();
+        }
+
         let mut guard = self.endpoint_quarantine.lock().await;
         let now = Instant::now();
         guard.retain(|_, expiry| *expiry > now);
@@ -236,8 +242,18 @@ impl MePool {
         let fast_retries = self.reconnect_runtime.me_reconnect_fast_retry_count.max(1);
         let mut total_attempts = 0u32;
         let same_endpoint_quarantined = self.is_endpoint_quarantined(addr).await;
+        let dc_endpoints = self.endpoints_for_dc(writer_dc).await;
+        let single_endpoint_dc = dc_endpoints.len() == 1 && dc_endpoints[0] == addr;
+        let bypass_quarantine_for_single_endpoint =
+            single_endpoint_dc && self.single_endpoint_outage_disable_quarantine();
 
-        if !same_endpoint_quarantined {
+        if !same_endpoint_quarantined || bypass_quarantine_for_single_endpoint {
+            if same_endpoint_quarantined && bypass_quarantine_for_single_endpoint {
+                debug!(
+                    %addr,
+                    "Bypassing quarantine for immediate reconnect on single-endpoint DC"
+                );
+            }
             for attempt in 0..fast_retries {
                 if total_attempts >= ME_REFILL_TOTAL_ATTEMPT_CAP {
                     break;
@@ -276,7 +292,6 @@ impl MePool {
             );
         }
 
-        let dc_endpoints = self.endpoints_for_dc(writer_dc).await;
         if dc_endpoints.is_empty() {
             self.stats.increment_me_refill_failed_total();
             return false;

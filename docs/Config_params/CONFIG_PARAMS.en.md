@@ -2542,8 +2542,7 @@ Note: This section also accepts the legacy alias `[server.admin_api]` (same sche
     [censorship]
     mask_relay_max_bytes = 5242880
     ```
-## "cfg-censorship-mask_relay_timeout_ms"
-- `mask_relay_timeout_ms`
+## mask_relay_timeout_ms
   - **Constraints / validation**: Should be `>= mask_relay_idle_timeout_ms`.
   - **Description**: Wall-clock cap for the full masking relay on non-MTProto fallback paths. Raise when the mask target is a long-lived service (e.g. WebSocket). Default: 60 000 ms (1 minute).
   - **Example**:
@@ -2552,8 +2551,7 @@ Note: This section also accepts the legacy alias `[server.admin_api]` (same sche
     [censorship]
     mask_relay_timeout_ms = 60000
     ```
-## "cfg-censorship-mask_relay_idle_timeout_ms"
-- `mask_relay_idle_timeout_ms`
+## mask_relay_idle_timeout_ms
   - **Constraints / validation**: Should be `<= mask_relay_timeout_ms`.
   - **Description**: Per-read idle timeout on masking relay and drain paths. Limits resource consumption by slow-loris attacks and port scanners. A read call stalling beyond this value is treated as an abandoned connection. Default: 5 000 ms (5 s).
   - **Example**:
@@ -2562,8 +2560,7 @@ Note: This section also accepts the legacy alias `[server.admin_api]` (same sche
     [censorship]
     mask_relay_idle_timeout_ms = 5000
     ```
-## "cfg-censorship-mask_classifier_prefetch_timeout_ms"
-- `mask_classifier_prefetch_timeout_ms`
+## mask_classifier_prefetch_timeout_ms
   - **Constraints / validation**: Must be within `[5, 50]` (milliseconds).
   - **Description**: Timeout budget (ms) for extending fragmented initial classifier window on masking fallback.
   - **Example**:

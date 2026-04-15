@@ -26,7 +26,9 @@ use crate::stats::Stats;
 use crate::transport::shadowsocks::{
     ShadowsocksStream, connect_shadowsocks, sanitize_shadowsocks_url,
 };
-use crate::transport::socket::{create_outgoing_socket_bound, resolve_interface_ip};
+use crate::transport::socket::{
+    bind_outgoing_socket_to_device, create_outgoing_socket_bound, resolve_interface_ip,
+};
 use crate::transport::socks::{connect_socks4, connect_socks5};
 
 /// Number of Telegram datacenters
@@ -327,6 +329,17 @@ pub struct UpstreamManager {
 }
 
 impl UpstreamManager {
+    fn is_unscoped_upstream(upstream: &UpstreamConfig) -> bool {
+        upstream.scopes.is_empty()
+    }
+
+    fn should_check_in_default_dc_connectivity(
+        has_unscoped: bool,
+        upstream: &UpstreamConfig,
+    ) -> bool {
+        !has_unscoped || Self::is_unscoped_upstream(upstream)
+    }
+
     pub fn new(
         configs: Vec<UpstreamConfig>,
         connect_retry_attempts: u32,
@@ -451,6 +464,87 @@ impl UpstreamManager {
             unhealthy_fail_threshold: self.unhealthy_fail_threshold,
             connect_failfast_hard_errors: self.connect_failfast_hard_errors,
         }
+    }
+
+    fn resolve_probe_dc_families(
+        upstream: &UpstreamConfig,
+        ipv4_available: bool,
+        ipv6_available: bool,
+    ) -> (bool, bool) {
+        (
+            upstream.ipv4.unwrap_or(ipv4_available),
+            upstream.ipv6.unwrap_or(ipv6_available),
+        )
+    }
+
+    fn resolve_runtime_dc_families(
+        upstream: &UpstreamConfig,
+        dc_preference: IpPreference,
+    ) -> (bool, bool) {
+        let (auto_ipv4, auto_ipv6) = match dc_preference {
+            IpPreference::PreferV4 => (true, false),
+            IpPreference::PreferV6 => (false, true),
+            IpPreference::BothWork | IpPreference::Unknown | IpPreference::Unavailable => {
+                (true, true)
+            }
+        };
+
+        (
+            upstream.ipv4.unwrap_or(auto_ipv4),
+            upstream.ipv6.unwrap_or(auto_ipv6),
+        )
+    }
+
+    fn dc_table_addr(dc_idx: i16, ipv6: bool, port: u16) -> Option<SocketAddr> {
+        let arr_idx = UpstreamState::dc_array_idx(dc_idx)?;
+        let ip = if ipv6 {
+            TG_DATACENTERS_V6[arr_idx]
+        } else {
+            TG_DATACENTERS_V4[arr_idx]
+        };
+        Some(SocketAddr::new(ip, port))
+    }
+
+    fn resolve_runtime_dc_target(
+        target: SocketAddr,
+        dc_idx: Option<i16>,
+        upstream: &UpstreamConfig,
+        dc_preference: IpPreference,
+    ) -> Result<SocketAddr> {
+        let (allow_ipv4, allow_ipv6) = Self::resolve_runtime_dc_families(upstream, dc_preference);
+        if (target.is_ipv4() && allow_ipv4) || (target.is_ipv6() && allow_ipv6) {
+            return Ok(target);
+        }
+
+        if !allow_ipv4 && !allow_ipv6 {
+            return Err(ProxyError::Config(format!(
+                "Upstream DC family policy blocks all families for target {target}"
+            )));
+        }
+
+        let Some(dc_idx) = dc_idx else {
+            return Err(ProxyError::Config(format!(
+                "Upstream DC family policy cannot remap target {target} without dc_idx"
+            )));
+        };
+
+        let remapped = if target.is_ipv4() {
+            if allow_ipv6 {
+                Self::dc_table_addr(dc_idx, true, target.port())
+            } else {
+                None
+            }
+        } else if allow_ipv4 {
+            Self::dc_table_addr(dc_idx, false, target.port())
+        } else {
+            None
+        };
+
+        remapped.ok_or_else(|| {
+            ProxyError::Config(format!(
+                "Upstream DC family policy rejected target {target} (dc_idx={dc_idx})"
+            ))
+        })
     }
 
     #[cfg(unix)]
@@ -726,18 +820,28 @@ impl UpstreamManager {
             .await
             .ok_or_else(|| ProxyError::Config("No upstreams available".to_string()))?;
 
-        let mut upstream = {
+        let (mut upstream, bind_rr, dc_preference) = {
             let guard = self.upstreams.read().await;
-            guard[idx].config.clone()
+            let state = &guard[idx];
+            let dc_preference = dc_idx
+                .and_then(UpstreamState::dc_array_idx)
+                .map(|dc_array_idx| state.dc_ip_pref[dc_array_idx])
+                .unwrap_or(IpPreference::Unknown);
+            (
+                state.config.clone(),
+                Some(state.bind_rr.clone()),
+                dc_preference,
+            )
         };
 
         if let Some(s) = scope {
             upstream.selected_scope = s.to_string();
         }
 
-        let bind_rr = {
-            let guard = self.upstreams.read().await;
-            guard.get(idx).map(|u| u.bind_rr.clone())
+        let target = if dc_idx.is_some() {
+            Self::resolve_runtime_dc_target(target, dc_idx, &upstream, dc_preference)?
+        } else {
+            target
         };
 
         let (stream, _) = self
@@ -758,9 +862,18 @@ impl UpstreamManager {
             .await
             .ok_or_else(|| ProxyError::Config("No upstreams available".to_string()))?;
 
-        let mut upstream = {
+        let (mut upstream, bind_rr, dc_preference) = {
             let guard = self.upstreams.read().await;
-            guard[idx].config.clone()
+            let state = &guard[idx];
+            let dc_preference = dc_idx
+                .and_then(UpstreamState::dc_array_idx)
+                .map(|dc_array_idx| state.dc_ip_pref[dc_array_idx])
+                .unwrap_or(IpPreference::Unknown);
+            (
+                state.config.clone(),
+                Some(state.bind_rr.clone()),
+                dc_preference,
+            )
         };
 
         // Set scope for configuration copy
@@ -768,9 +881,10 @@ impl UpstreamManager {
             upstream.selected_scope = s.to_string();
         }
 
-        let bind_rr = {
-            let guard = self.upstreams.read().await;
-            guard.get(idx).map(|u| u.bind_rr.clone())
+        let target = if dc_idx.is_some() {
+            Self::resolve_runtime_dc_target(target, dc_idx, &upstream, dc_preference)?
+        } else {
+            target
         };
 
         let (stream, egress) = self
@@ -928,6 +1042,7 @@ impl UpstreamManager {
             UpstreamType::Direct {
                 interface,
                 bind_addresses,
+                bindtodevice,
             } => {
                 let bind_ip = Self::resolve_bind_address(
                     interface,
@@ -943,6 +1058,10 @@ impl UpstreamManager {
                 }
 
                 let socket = create_outgoing_socket_bound(target, bind_ip)?;
+                if let Some(device) = bindtodevice.as_deref().filter(|value| !value.is_empty()) {
+                    bind_outgoing_socket_to_device(&socket, device).map_err(ProxyError::Io)?;
+                    debug!(bindtodevice = %device, target = %target, "Pinned socket to interface");
+                }
                 if let Some(ip) = bind_ip {
                     debug!(bind = %ip, target = %target, "Bound outgoing socket");
                 } else if interface.is_some() || bind_addresses.is_some() {
@@ -1201,14 +1320,26 @@ impl UpstreamManager {
                 .map(|(i, u)| (i, u.config.clone(), u.bind_rr.clone()))
                 .collect()
         };
+        let has_unscoped = upstreams
+            .iter()
+            .any(|(_, cfg, _)| Self::is_unscoped_upstream(cfg));
 
         let mut all_results = Vec::new();
 
         for (upstream_idx, upstream_config, bind_rr) in &upstreams {
+            // DC connectivity checks should follow the default routing path.
+            // Scoped upstreams are included only when no unscoped upstream exists.
+            if !Self::should_check_in_default_dc_connectivity(has_unscoped, upstream_config) {
+                continue;
+            }
+
+            let (upstream_ipv4_enabled, upstream_ipv6_enabled) =
+                Self::resolve_probe_dc_families(upstream_config, ipv4_enabled, ipv6_enabled);
             let upstream_name = match &upstream_config.upstream_type {
                 UpstreamType::Direct {
                     interface,
                     bind_addresses,
+                    bindtodevice,
                 } => {
                     let mut direct_parts = Vec::new();
                     if let Some(dev) = interface.as_deref().filter(|v| !v.is_empty()) {
@@ -1216,6 +1347,9 @@ impl UpstreamManager {
                     }
                     if let Some(src) = bind_addresses.as_ref().filter(|v| !v.is_empty()) {
                         direct_parts.push(format!("src={}", src.join(",")));
+                    }
+                    if let Some(device) = bindtodevice.as_deref().filter(|v| !v.is_empty()) {
+                        direct_parts.push(format!("bindtodevice={device}"));
                     }
                     if direct_parts.is_empty() {
                         "direct".to_string()
@@ -1233,7 +1367,7 @@ impl UpstreamManager {
             };
 
             let mut v6_results = Vec::with_capacity(NUM_DCS);
-            if ipv6_enabled {
+            if upstream_ipv6_enabled {
                 for dc_zero_idx in 0..NUM_DCS {
                     let dc_v6 = TG_DATACENTERS_V6[dc_zero_idx];
                     let addr_v6 = SocketAddr::new(dc_v6, TG_DATACENTER_PORT);
@@ -1284,13 +1418,17 @@ impl UpstreamManager {
                         dc_idx: dc_zero_idx + 1,
                         dc_addr: SocketAddr::new(dc_v6, TG_DATACENTER_PORT),
                         rtt_ms: None,
-                        error: Some("ipv6 disabled".to_string()),
+                        error: Some(if ipv6_enabled {
+                            "ipv6 disabled by upstream policy".to_string()
+                        } else {
+                            "ipv6 disabled".to_string()
+                        }),
                     });
                 }
             }
 
             let mut v4_results = Vec::with_capacity(NUM_DCS);
-            if ipv4_enabled {
+            if upstream_ipv4_enabled {
                 for dc_zero_idx in 0..NUM_DCS {
                     let dc_v4 = TG_DATACENTERS_V4[dc_zero_idx];
                     let addr_v4 = SocketAddr::new(dc_v4, TG_DATACENTER_PORT);
@@ -1341,7 +1479,11 @@ impl UpstreamManager {
                         dc_idx: dc_zero_idx + 1,
                         dc_addr: SocketAddr::new(dc_v4, TG_DATACENTER_PORT),
                         rtt_ms: None,
-                        error: Some("ipv4 disabled".to_string()),
+                        error: Some(if ipv4_enabled {
+                            "ipv4 disabled by upstream policy".to_string()
+                        } else {
+                            "ipv4 disabled".to_string()
+                        }),
                     });
                 }
             }
@@ -1361,7 +1503,9 @@ impl UpstreamManager {
                     match addr_str.parse::<SocketAddr>() {
                         Ok(addr) => {
                             let is_v6 = addr.is_ipv6();
-                            if (is_v6 && !ipv6_enabled) || (!is_v6 && !ipv4_enabled) {
+                            if (is_v6 && !upstream_ipv6_enabled)
+                                || (!is_v6 && !upstream_ipv4_enabled)
+                            {
                                 continue;
                             }
                             let result = tokio::time::timeout(
@@ -1596,13 +1740,32 @@ impl UpstreamManager {
                 continue;
             }
 
-            let count = self.upstreams.read().await.len();
-            for i in 0..count {
+            let target_upstreams: Vec<usize> = {
+                let guard = self.upstreams.read().await;
+                let has_unscoped = guard
+                    .iter()
+                    .any(|upstream| Self::is_unscoped_upstream(&upstream.config));
+                guard
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, upstream)| {
+                        Self::should_check_in_default_dc_connectivity(
+                            has_unscoped,
+                            &upstream.config,
+                        )
+                    })
+                    .map(|(idx, _)| idx)
+                    .collect()
+            };
+
+            for i in target_upstreams {
                 let (config, bind_rr) = {
                     let guard = self.upstreams.read().await;
                     let u = &guard[i];
                     (u.config.clone(), u.bind_rr.clone())
                 };
+                let (upstream_ipv4_enabled, upstream_ipv6_enabled) =
+                    Self::resolve_probe_dc_families(&config, ipv4_enabled, ipv6_enabled);
 
                 let mut healthy_groups = 0usize;
                 let mut latency_updates: Vec<(usize, f64)> = Vec::new();
@@ -1618,14 +1781,30 @@ impl UpstreamManager {
                             continue;
                         }
 
-                        let rotation_key = (i, group.dc_idx, is_primary);
-                        let start_idx =
-                            *endpoint_rotation.entry(rotation_key).or_insert(0) % endpoints.len();
-                        let mut next_idx = (start_idx + 1) % endpoints.len();
+                        let filtered_endpoints: Vec<SocketAddr> = endpoints
+                            .iter()
+                            .copied()
+                            .filter(|endpoint| {
+                                if endpoint.is_ipv4() {
+                                    upstream_ipv4_enabled
+                                } else {
+                                    upstream_ipv6_enabled
+                                }
+                            })
+                            .collect();
 
-                        for step in 0..endpoints.len() {
-                            let endpoint_idx = (start_idx + step) % endpoints.len();
-                            let endpoint = endpoints[endpoint_idx];
+                        if filtered_endpoints.is_empty() {
+                            continue;
+                        }
+
+                        let rotation_key = (i, group.dc_idx, is_primary);
+                        let start_idx = *endpoint_rotation.entry(rotation_key).or_insert(0)
+                            % filtered_endpoints.len();
+                        let mut next_idx = (start_idx + 1) % filtered_endpoints.len();
+
+                        for step in 0..filtered_endpoints.len() {
+                            let endpoint_idx = (start_idx + step) % filtered_endpoints.len();
+                            let endpoint = filtered_endpoints[endpoint_idx];
 
                             let start = Instant::now();
                             let result = tokio::time::timeout(
@@ -1644,7 +1823,7 @@ impl UpstreamManager {
                                 Ok(Ok(_stream)) => {
                                     group_ok = true;
                                     group_rtt_ms = Some(start.elapsed().as_secs_f64() * 1000.0);
-                                    next_idx = (endpoint_idx + 1) % endpoints.len();
+                                    next_idx = (endpoint_idx + 1) % filtered_endpoints.len();
                                     break;
                                 }
                                 Ok(Err(e)) => {
@@ -1860,6 +2039,33 @@ mod tests {
     }
 
     #[test]
+    fn unscoped_selection_detects_default_route_upstream() {
+        let mut upstream = UpstreamConfig {
+            upstream_type: UpstreamType::Direct {
+                interface: None,
+                bind_addresses: None,
+                bindtodevice: None,
+            },
+            weight: 1,
+            enabled: true,
+            scopes: String::new(),
+            selected_scope: String::new(),
+            ipv4: None,
+            ipv6: None,
+        };
+
+        assert!(UpstreamManager::is_unscoped_upstream(&upstream));
+        upstream.scopes = "local".to_string();
+        assert!(!UpstreamManager::is_unscoped_upstream(&upstream));
+        assert!(!UpstreamManager::should_check_in_default_dc_connectivity(
+            true, &upstream
+        ));
+        assert!(UpstreamManager::should_check_in_default_dc_connectivity(
+            false, &upstream
+        ));
+    }
+
+    #[test]
     fn resolve_bind_address_prefers_explicit_bind_ip() {
         let target = "203.0.113.10:443".parse::<SocketAddr>().unwrap();
         let bind = UpstreamManager::resolve_bind_address(
@@ -1899,6 +2105,8 @@ mod tests {
                 enabled: true,
                 scopes: String::new(),
                 selected_scope: String::new(),
+                ipv4: None,
+                ipv6: None,
             }],
             1,
             100,

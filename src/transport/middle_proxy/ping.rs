@@ -67,6 +67,7 @@ pub fn format_sample_line(sample: &MePingSample) -> String {
 fn format_direct_with_config(
     interface: &Option<String>,
     bind_addresses: &Option<Vec<String>>,
+    bindtodevice: &Option<String>,
 ) -> Option<String> {
     let mut direct_parts: Vec<String> = Vec::new();
     if let Some(dev) = interface.as_deref().filter(|v| !v.is_empty()) {
@@ -74,6 +75,9 @@ fn format_direct_with_config(
     }
     if let Some(src) = bind_addresses.as_ref().filter(|v| !v.is_empty()) {
         direct_parts.push(format!("src={}", src.join(",")));
+    }
+    if let Some(device) = bindtodevice.as_deref().filter(|v| !v.is_empty()) {
+        direct_parts.push(format!("bindtodevice={device}"));
     }
     if direct_parts.is_empty() {
         None
@@ -231,8 +235,11 @@ pub async fn format_me_route(
             UpstreamType::Direct {
                 interface,
                 bind_addresses,
+                bindtodevice,
             } => {
-                if let Some(route) = format_direct_with_config(interface, bind_addresses) {
+                if let Some(route) =
+                    format_direct_with_config(interface, bind_addresses, bindtodevice)
+                {
                     route
                 } else {
                     detect_direct_route_details(reports, prefer_ipv6, v4_ok, v6_ok)

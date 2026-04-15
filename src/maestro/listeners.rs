@@ -31,6 +31,19 @@ pub(crate) struct BoundListeners {
     pub(crate) has_unix_listener: bool,
 }
 
+fn listener_port_or_legacy(listener: &crate::config::ListenerConfig, config: &ProxyConfig) -> u16 {
+    listener.port.unwrap_or(config.server.port)
+}
+
+fn default_link_port(config: &ProxyConfig) -> u16 {
+    config
+        .server
+        .listeners
+        .first()
+        .and_then(|listener| listener.port)
+        .unwrap_or(config.server.port)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn bind_listeners(
     config: &Arc<ProxyConfig>,
@@ -63,7 +76,8 @@ pub(crate) async fn bind_listeners(
     let mut listeners = Vec::new();
 
     for listener_conf in &config.server.listeners {
-        let addr = SocketAddr::new(listener_conf.ip, config.server.port);
+        let listener_port = listener_port_or_legacy(listener_conf, config);
+        let addr = SocketAddr::new(listener_conf.ip, listener_port);
         if addr.is_ipv4() && !decision_ipv4_dc {
             warn!(%addr, "Skipping IPv4 listener: IPv4 disabled by [network]");
             continue;
@@ -106,11 +120,7 @@ pub(crate) async fn bind_listeners(
                 if config.general.links.public_host.is_none()
                     && !config.general.links.show.is_empty()
                 {
-                    let link_port = config
-                        .general
-                        .links
-                        .public_port
-                        .unwrap_or(config.server.port);
+                    let link_port = config.general.links.public_port.unwrap_or(listener_port);
                     print_proxy_links(&public_host, link_port, config);
                 }
 
@@ -158,7 +168,7 @@ pub(crate) async fn bind_listeners(
                     .general
                     .links
                     .public_port
-                    .unwrap_or(config.server.port),
+                    .unwrap_or(default_link_port(config)),
             )
         } else {
             let ip = detected_ip_v4.or(detected_ip_v6).map(|ip| ip.to_string());
@@ -173,7 +183,7 @@ pub(crate) async fn bind_listeners(
                     .general
                     .links
                     .public_port
-                    .unwrap_or(config.server.port),
+                    .unwrap_or(default_link_port(config)),
             )
         };
 

@@ -343,15 +343,28 @@ fn command_exists(binary: &str) -> bool {
     })
 }
 
-fn notrack_targets(cfg: &ProxyConfig) -> (Vec<Option<IpAddr>>, Vec<Option<IpAddr>>) {
+fn listener_port_set(cfg: &ProxyConfig) -> Vec<u16> {
+    let mut ports: BTreeSet<u16> = BTreeSet::new();
+    if cfg.server.listeners.is_empty() {
+        ports.insert(cfg.server.port);
+    } else {
+        for listener in &cfg.server.listeners {
+            ports.insert(listener.port.unwrap_or(cfg.server.port));
+        }
+    }
+    ports.into_iter().collect()
+}
+
+fn notrack_targets(cfg: &ProxyConfig) -> (Vec<(Option<IpAddr>, u16)>, Vec<(Option<IpAddr>, u16)>) {
     let mode = cfg.server.conntrack_control.mode;
-    let mut v4_targets: BTreeSet<Option<IpAddr>> = BTreeSet::new();
-    let mut v6_targets: BTreeSet<Option<IpAddr>> = BTreeSet::new();
+    let mut v4_targets: BTreeSet<(Option<IpAddr>, u16)> = BTreeSet::new();
+    let mut v6_targets: BTreeSet<(Option<IpAddr>, u16)> = BTreeSet::new();
 
     match mode {
         ConntrackMode::Tracked => {}
         ConntrackMode::Notrack => {
             if cfg.server.listeners.is_empty() {
+                let port = cfg.server.port;
                 if let Some(ipv4) = cfg
                     .server
                     .listen_addr_ipv4
@@ -359,9 +372,9 @@ fn notrack_targets(cfg: &ProxyConfig) -> (Vec<Option<IpAddr>>, Vec<Option<IpAddr
                     .and_then(|s| s.parse::<IpAddr>().ok())
                 {
                     if ipv4.is_unspecified() {
-                        v4_targets.insert(None);
+                        v4_targets.insert((None, port));
                     } else {
-                        v4_targets.insert(Some(ipv4));
+                        v4_targets.insert((Some(ipv4), port));
                     }
                 }
                 if let Some(ipv6) = cfg
@@ -371,33 +384,39 @@ fn notrack_targets(cfg: &ProxyConfig) -> (Vec<Option<IpAddr>>, Vec<Option<IpAddr
                     .and_then(|s| s.parse::<IpAddr>().ok())
                 {
                     if ipv6.is_unspecified() {
-                        v6_targets.insert(None);
+                        v6_targets.insert((None, port));
                     } else {
-                        v6_targets.insert(Some(ipv6));
+                        v6_targets.insert((Some(ipv6), port));
                     }
                 }
             } else {
                 for listener in &cfg.server.listeners {
+                    let port = listener.port.unwrap_or(cfg.server.port);
                     if listener.ip.is_ipv4() {
                         if listener.ip.is_unspecified() {
-                            v4_targets.insert(None);
+                            v4_targets.insert((None, port));
                         } else {
-                            v4_targets.insert(Some(listener.ip));
+                            v4_targets.insert((Some(listener.ip), port));
                         }
                     } else if listener.ip.is_unspecified() {
-                        v6_targets.insert(None);
+                        v6_targets.insert((None, port));
                     } else {
-                        v6_targets.insert(Some(listener.ip));
+                        v6_targets.insert((Some(listener.ip), port));
                     }
                 }
             }
         }
         ConntrackMode::Hybrid => {
+            let ports = listener_port_set(cfg);
             for ip in &cfg.server.conntrack_control.hybrid_listener_ips {
                 if ip.is_ipv4() {
-                    v4_targets.insert(Some(*ip));
+                    for port in &ports {
+                        v4_targets.insert((Some(*ip), *port));
+                    }
                 } else {
-                    v6_targets.insert(Some(*ip));
+                    for port in &ports {
+                        v6_targets.insert((Some(*ip), *port));
+                    }
                 }
             }
         }
@@ -422,19 +441,19 @@ async fn apply_nft_rules(cfg: &ProxyConfig) -> Result<(), String> {
 
     let (v4_targets, v6_targets) = notrack_targets(cfg);
     let mut rules = Vec::new();
-    for ip in v4_targets {
+    for (ip, port) in v4_targets {
         let rule = if let Some(ip) = ip {
-            format!("tcp dport {} ip daddr {} notrack", cfg.server.port, ip)
+            format!("tcp dport {} ip daddr {} notrack", port, ip)
         } else {
-            format!("tcp dport {} notrack", cfg.server.port)
+            format!("tcp dport {} notrack", port)
         };
         rules.push(rule);
     }
-    for ip in v6_targets {
+    for (ip, port) in v6_targets {
         let rule = if let Some(ip) = ip {
-            format!("tcp dport {} ip6 daddr {} notrack", cfg.server.port, ip)
+            format!("tcp dport {} ip6 daddr {} notrack", port, ip)
         } else {
-            format!("tcp dport {} notrack", cfg.server.port)
+            format!("tcp dport {} notrack", port)
         };
         rules.push(rule);
     }
@@ -498,7 +517,7 @@ async fn apply_iptables_rules_for_binary(
 
     let (v4_targets, v6_targets) = notrack_targets(cfg);
     let selected = if ipv4 { v4_targets } else { v6_targets };
-    for ip in selected {
+    for (ip, port) in selected {
         let mut args = vec![
             "-t".to_string(),
             "raw".to_string(),
@@ -507,7 +526,7 @@ async fn apply_iptables_rules_for_binary(
             "-p".to_string(),
             "tcp".to_string(),
             "--dport".to_string(),
-            cfg.server.port.to_string(),
+            port.to_string(),
         ];
         if let Some(ip) = ip {
             args.push("-d".to_string());

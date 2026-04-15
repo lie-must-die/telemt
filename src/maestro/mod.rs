@@ -81,23 +81,11 @@ pub async fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-#[cfg(unix)]
-async fn run_inner(
-    daemon_opts: DaemonOptions,
+// Shared maestro startup and main loop. `drop_after_bind` runs on Unix after listeners are bound
+// (for privilege drop); it is a no-op on other platforms.
+async fn run_telemt_core(
+    drop_after_bind: impl FnOnce(),
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    // Acquire PID file if daemonizing or if explicitly requested
-    // Keep it alive until shutdown (underscore prefix = intentionally kept for RAII cleanup)
-    let _pid_file = if daemon_opts.daemonize || daemon_opts.pid_file.is_some() {
-        let mut pf = PidFile::new(daemon_opts.pid_file_path());
-        if let Err(e) = pf.acquire() {
-            eprintln!("[telemt] {}", e);
-            std::process::exit(1);
-        }
-        Some(pf)
-    } else {
-        None
-    };
-
     let process_started_at = Instant::now();
     let process_started_at_epoch_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -761,17 +749,8 @@ async fn run_inner(
         std::process::exit(1);
     }
 
-    // Drop privileges after binding sockets (which may require root for port < 1024)
-    if daemon_opts.user.is_some() || daemon_opts.group.is_some() {
-        if let Err(e) = drop_privileges(
-            daemon_opts.user.as_deref(),
-            daemon_opts.group.as_deref(),
-            _pid_file.as_ref(),
-        ) {
-            error!(error = %e, "Failed to drop privileges");
-            std::process::exit(1);
-        }
-    }
+    // On Unix, caller supplies privilege drop after bind (may require root for port < 1024).
+    drop_after_bind();
 
     runtime_tasks::apply_runtime_log_filter(
         has_rust_log,
@@ -818,4 +797,40 @@ async fn run_inner(
     shutdown::wait_for_shutdown(process_started_at, me_pool, stats).await;
 
     Ok(())
+}
+
+#[cfg(unix)]
+async fn run_inner(
+    daemon_opts: DaemonOptions,
+) -> std::result::Result<(), Box<dyn std::error::Error>> {
+    // Acquire PID file if daemonizing or if explicitly requested
+    // Keep it alive until shutdown (underscore prefix = intentionally kept for RAII cleanup)
+    let _pid_file = if daemon_opts.daemonize || daemon_opts.pid_file.is_some() {
+        let mut pf = PidFile::new(daemon_opts.pid_file_path());
+        if let Err(e) = pf.acquire() {
+            eprintln!("[telemt] {}", e);
+            std::process::exit(1);
+        }
+        Some(pf)
+    } else {
+        None
+    };
+
+    let user = daemon_opts.user.clone();
+    let group = daemon_opts.group.clone();
+
+    run_telemt_core(|| {
+        if user.is_some() || group.is_some() {
+            if let Err(e) = drop_privileges(user.as_deref(), group.as_deref(), _pid_file.as_ref()) {
+                error!(error = %e, "Failed to drop privileges");
+                std::process::exit(1);
+            }
+        }
+    })
+    .await
+}
+
+#[cfg(not(unix))]
+async fn run_inner() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    run_telemt_core(|| {}).await
 }

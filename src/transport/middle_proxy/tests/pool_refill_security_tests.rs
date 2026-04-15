@@ -109,18 +109,16 @@ async fn connectable_endpoints_waits_until_quarantine_expires() {
 
     {
         let mut guard = pool.endpoint_quarantine.lock().await;
-        guard.insert(addr, Instant::now() + Duration::from_millis(80));
+        guard.insert(addr, Instant::now() + Duration::from_millis(500));
     }
 
-    let started = Instant::now();
-    let endpoints = pool.connectable_endpoints_for_test(&[addr]).await;
-    let elapsed = started.elapsed();
-
+    let endpoints = tokio::time::timeout(
+        Duration::from_millis(120),
+        pool.connectable_endpoints_for_test(&[addr]),
+    )
+    .await
+    .expect("single-endpoint outage mode should bypass quarantine delay");
     assert_eq!(endpoints, vec![addr]);
-    assert!(
-        elapsed >= Duration::from_millis(50),
-        "single-endpoint DC should honor quarantine before retry"
-    );
 }
 
 #[tokio::test]

@@ -1153,7 +1153,8 @@ pub struct LinksConfig {
     #[serde(default)]
     pub public_host: Option<String>,
 
-    /// Public port for tg:// link generation (overrides server.port).
+    /// Public port for tg:// link generation.
+    /// Overrides listener ports and legacy `server.port`.
     #[serde(default)]
     pub public_port: Option<u16>,
 }
@@ -1182,6 +1183,13 @@ pub struct ApiConfig {
     /// CIDR whitelist allowed to access API.
     #[serde(default = "default_api_whitelist")]
     pub whitelist: Vec<IpNetwork>,
+
+    /// Behavior for requests from source IPs outside `whitelist`.
+    /// - `api`: return structured API forbidden response.
+    /// - `200`: return `200 OK` with an empty body.
+    /// - `drop`: close the connection without HTTP response.
+    #[serde(default)]
+    pub gray_action: ApiGrayAction,
 
     /// Optional static value for `Authorization` header validation.
     /// Empty string disables header auth.
@@ -1227,6 +1235,7 @@ impl Default for ApiConfig {
             enabled: default_true(),
             listen: default_api_listen(),
             whitelist: default_api_whitelist(),
+            gray_action: ApiGrayAction::default(),
             auth_header: String::new(),
             request_body_limit_bytes: default_api_request_body_limit_bytes(),
             minimal_runtime_enabled: default_api_minimal_runtime_enabled(),
@@ -1238,6 +1247,19 @@ impl Default for ApiConfig {
             read_only: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ApiGrayAction {
+    /// Preserve current API behavior for denied source IPs.
+    Api,
+    /// Mimic a plain web endpoint by returning `200 OK` with an empty body.
+    #[serde(rename = "200")]
+    Ok200,
+    /// Drop connection without HTTP response for denied source IPs.
+    #[default]
+    Drop,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1354,6 +1376,8 @@ impl Default for ConntrackControlConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
+    /// Legacy listener port used for backward compatibility.
+    /// For new configs prefer `[[server.listeners]].port`.
     #[serde(default = "default_port")]
     pub port: u16,
 
@@ -1710,6 +1734,19 @@ pub struct AntiCensorshipConfig {
     #[serde(default = "default_mask_relay_max_bytes")]
     pub mask_relay_max_bytes: usize,
 
+    /// Wall-clock cap for the full masking relay on non-MTProto fallback paths.
+    /// Raise when the mask target is a long-lived service (e.g. WebSocket).
+    /// Default: 60 000 ms (60 s).
+    #[serde(default = "default_mask_relay_timeout_ms")]
+    pub mask_relay_timeout_ms: u64,
+
+    /// Per-read idle timeout on masking relay and drain paths.
+    /// Limits resource consumption by slow-loris attacks and port scanners.
+    /// A read call stalling beyond this is treated as an abandoned connection.
+    /// Default: 5 000 ms (5 s).
+    #[serde(default = "default_mask_relay_idle_timeout_ms")]
+    pub mask_relay_idle_timeout_ms: u64,
+
     /// Prefetch timeout (ms) for extending fragmented masking classifier window.
     #[serde(default = "default_mask_classifier_prefetch_timeout_ms")]
     pub mask_classifier_prefetch_timeout_ms: u64,
@@ -1755,6 +1792,8 @@ impl Default for AntiCensorshipConfig {
             mask_shape_above_cap_blur: default_mask_shape_above_cap_blur(),
             mask_shape_above_cap_blur_max_bytes: default_mask_shape_above_cap_blur_max_bytes(),
             mask_relay_max_bytes: default_mask_relay_max_bytes(),
+            mask_relay_timeout_ms: default_mask_relay_timeout_ms(),
+            mask_relay_idle_timeout_ms: default_mask_relay_idle_timeout_ms(),
             mask_classifier_prefetch_timeout_ms: default_mask_classifier_prefetch_timeout_ms(),
             mask_timing_normalization_enabled: default_mask_timing_normalization_enabled(),
             mask_timing_normalization_floor_ms: default_mask_timing_normalization_floor_ms(),
@@ -1841,6 +1880,10 @@ pub enum UpstreamType {
         interface: Option<String>,
         #[serde(default)]
         bind_addresses: Option<Vec<String>>,
+        /// Linux-only hard interface pinning via `SO_BINDTODEVICE`.
+        /// Optional alias: `force_bind`.
+        #[serde(default, alias = "force_bind")]
+        bindtodevice: Option<String>,
     },
     Socks4 {
         address: String,
@@ -1877,11 +1920,22 @@ pub struct UpstreamConfig {
     pub scopes: String,
     #[serde(skip)]
     pub selected_scope: String,
+    /// Allow IPv4 DC targets for this upstream.
+    /// `None` means auto-detect from runtime connectivity state.
+    #[serde(default)]
+    pub ipv4: Option<bool>,
+    /// Allow IPv6 DC targets for this upstream.
+    /// `None` means auto-detect from runtime connectivity state.
+    #[serde(default)]
+    pub ipv6: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListenerConfig {
     pub ip: IpAddr,
+    /// Per-listener TCP port. If omitted, falls back to legacy `server.port`.
+    #[serde(default)]
+    pub port: Option<u16>,
     /// IP address or hostname to announce in proxy links.
     /// Takes precedence over `announce_ip` if both are set.
     #[serde(default)]

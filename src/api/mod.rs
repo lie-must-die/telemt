@@ -1,6 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 
-use std::convert::Infallible;
+use std::io::{Error as IoError, ErrorKind};
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,7 +16,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{Mutex, RwLock, watch};
 use tracing::{debug, info, warn};
 
-use crate::config::ProxyConfig;
+use crate::config::{ApiGrayAction, ProxyConfig};
 use crate::ip_tracker::UserIpTracker;
 use crate::proxy::route_mode::RouteRuntimeController;
 use crate::startup::StartupTracker;
@@ -184,7 +184,9 @@ pub async fn serve(
                 .serve_connection(hyper_util::rt::TokioIo::new(stream), svc)
                 .await
             {
-                debug!(error = %error, "API connection error");
+                if !error.is_user() {
+                    debug!(error = %error, "API connection error");
+                }
             }
         });
     }
@@ -195,7 +197,7 @@ async fn handle(
     peer: SocketAddr,
     shared: Arc<ApiShared>,
     config_rx: watch::Receiver<Arc<ProxyConfig>>,
-) -> Result<Response<Full<Bytes>>, Infallible> {
+) -> Result<Response<Full<Bytes>>, IoError> {
     let request_id = shared.next_request_id();
     let cfg = config_rx.borrow().clone();
     let api_cfg = &cfg.server.api;
@@ -213,14 +215,25 @@ async fn handle(
 
     if !api_cfg.whitelist.is_empty() && !api_cfg.whitelist.iter().any(|net| net.contains(peer.ip()))
     {
-        return Ok(error_response(
-            request_id,
-            ApiFailure::new(
-                StatusCode::FORBIDDEN,
-                "forbidden",
-                "Source IP is not allowed",
-            ),
-        ));
+        return match api_cfg.gray_action {
+            ApiGrayAction::Api => Ok(error_response(
+                request_id,
+                ApiFailure::new(
+                    StatusCode::FORBIDDEN,
+                    "forbidden",
+                    "Source IP is not allowed",
+                ),
+            )),
+            ApiGrayAction::Ok200 => Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "text/html; charset=utf-8")
+                .body(Full::new(Bytes::new()))
+                .unwrap()),
+            ApiGrayAction::Drop => Err(IoError::new(
+                ErrorKind::ConnectionAborted,
+                "api request dropped by gray_action=drop",
+            )),
+        };
     }
 
     if !api_cfg.auth_header.is_empty() {
@@ -244,11 +257,16 @@ async fn handle(
 
     let method = req.method().clone();
     let path = req.uri().path().to_string();
+    let normalized_path = if path.len() > 1 {
+        path.trim_end_matches('/')
+    } else {
+        path.as_str()
+    };
     let query = req.uri().query().map(str::to_string);
     let body_limit = api_cfg.request_body_limit_bytes;
 
     let result: Result<Response<Full<Bytes>>, ApiFailure> = async {
-        match (method.as_str(), path.as_str()) {
+        match (method.as_str(), normalized_path) {
             ("GET", "/v1/health") => {
                 let revision = current_revision(&shared.config_path).await?;
                 let data = HealthData {
@@ -431,7 +449,7 @@ async fn handle(
                 Ok(success_response(status, data, revision))
             }
             _ => {
-                if let Some(user) = path.strip_prefix("/v1/users/")
+                if let Some(user) = normalized_path.strip_prefix("/v1/users/")
                     && !user.is_empty()
                     && !user.contains('/')
                 {
@@ -600,6 +618,12 @@ async fn handle(
                         ),
                     ));
                 }
+                debug!(
+                    method = method.as_str(),
+                    path = %path,
+                    normalized_path = %normalized_path,
+                    "API route not found"
+                );
                 Ok(error_response(
                     request_id,
                     ApiFailure::new(StatusCode::NOT_FOUND, "not_found", "Route not found"),

@@ -452,7 +452,11 @@ fn build_user_links(
     startup_detected_ip_v6: Option<IpAddr>,
 ) -> UserLinks {
     let hosts = resolve_link_hosts(cfg, startup_detected_ip_v4, startup_detected_ip_v6);
-    let port = cfg.general.links.public_port.unwrap_or(cfg.server.port);
+    let port = cfg
+        .general
+        .links
+        .public_port
+        .unwrap_or(resolve_default_link_port(cfg));
     let tls_domains = resolve_tls_domains(cfg);
 
     let mut classic = Vec::new();
@@ -488,6 +492,14 @@ fn build_user_links(
         secure,
         tls,
     }
+}
+
+fn resolve_default_link_port(cfg: &ProxyConfig) -> u16 {
+    cfg.server
+        .listeners
+        .first()
+        .and_then(|listener| listener.port)
+        .unwrap_or(cfg.server.port)
 }
 
 fn resolve_link_hosts(

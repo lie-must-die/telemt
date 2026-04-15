@@ -158,6 +158,56 @@ pub fn create_outgoing_socket_bound(addr: SocketAddr, bind_addr: Option<IpAddr>)
     Ok(socket)
 }
 
+/// Pin an outgoing socket to a specific Linux network interface via SO_BINDTODEVICE.
+#[cfg(target_os = "linux")]
+pub fn bind_outgoing_socket_to_device(socket: &Socket, device: &str) -> Result<()> {
+    use std::io::{Error, ErrorKind};
+    use std::os::fd::AsRawFd;
+
+    let name = device.trim();
+    if name.is_empty() {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "bindtodevice must not be empty",
+        ));
+    }
+
+    // The kernel expects an interface name buffer with a trailing NUL.
+    if name.len() >= libc::IFNAMSIZ {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "bindtodevice exceeds IFNAMSIZ",
+        ));
+    }
+    let mut ifname = [0u8; libc::IFNAMSIZ];
+    ifname[..name.len()].copy_from_slice(name.as_bytes());
+
+    let rc = unsafe {
+        libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_BINDTODEVICE,
+            ifname.as_ptr().cast::<libc::c_void>(),
+            (name.len() + 1) as libc::socklen_t,
+        )
+    };
+    if rc != 0 {
+        return Err(Error::last_os_error());
+    }
+    debug!("Pinned outgoing socket to interface {}", name);
+    Ok(())
+}
+
+/// Stub for non-Linux targets where SO_BINDTODEVICE is unavailable.
+#[cfg(not(target_os = "linux"))]
+pub fn bind_outgoing_socket_to_device(_socket: &Socket, _device: &str) -> Result<()> {
+    use std::io::{Error, ErrorKind};
+    Err(Error::new(
+        ErrorKind::Unsupported,
+        "bindtodevice is supported only on Linux",
+    ))
+}
+
 /// Get local address of a socket
 #[allow(dead_code)]
 pub fn get_local_addr(stream: &TcpStream) -> Option<SocketAddr> {

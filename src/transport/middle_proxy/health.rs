@@ -67,10 +67,8 @@ struct FamilyReconnectOutcome {
     key: (i32, IpFamily),
     dc: i32,
     family: IpFamily,
-    alive: usize,
     required: usize,
     endpoint_count: usize,
-    restored: usize,
 }
 
 pub async fn me_health_monitor(pool: Arc<MePool>, rng: Arc<SecureRandom>, _min_connections: usize) {
@@ -82,8 +80,6 @@ pub async fn me_health_monitor(pool: Arc<MePool>, rng: Arc<SecureRandom>, _min_c
     let mut single_endpoint_outage: HashSet<(i32, IpFamily)> = HashSet::new();
     let mut shadow_rotate_deadline: HashMap<(i32, IpFamily), Instant> = HashMap::new();
     let mut idle_refresh_next_attempt: HashMap<(i32, IpFamily), Instant> = HashMap::new();
-    let mut adaptive_idle_since: HashMap<(i32, IpFamily), Instant> = HashMap::new();
-    let mut adaptive_recover_until: HashMap<(i32, IpFamily), Instant> = HashMap::new();
     let mut floor_warn_next_allowed: HashMap<(i32, IpFamily), Instant> = HashMap::new();
     let mut drain_warn_next_allowed: HashMap<u64, Instant> = HashMap::new();
     let mut degraded_interval = true;
@@ -109,8 +105,6 @@ pub async fn me_health_monitor(pool: Arc<MePool>, rng: Arc<SecureRandom>, _min_c
             &mut single_endpoint_outage,
             &mut shadow_rotate_deadline,
             &mut idle_refresh_next_attempt,
-            &mut adaptive_idle_since,
-            &mut adaptive_recover_until,
             &mut floor_warn_next_allowed,
         )
         .await;
@@ -126,8 +120,6 @@ pub async fn me_health_monitor(pool: Arc<MePool>, rng: Arc<SecureRandom>, _min_c
             &mut single_endpoint_outage,
             &mut shadow_rotate_deadline,
             &mut idle_refresh_next_attempt,
-            &mut adaptive_idle_since,
-            &mut adaptive_recover_until,
             &mut floor_warn_next_allowed,
         )
         .await;
@@ -360,8 +352,6 @@ async fn check_family(
     single_endpoint_outage: &mut HashSet<(i32, IpFamily)>,
     shadow_rotate_deadline: &mut HashMap<(i32, IpFamily), Instant>,
     idle_refresh_next_attempt: &mut HashMap<(i32, IpFamily), Instant>,
-    adaptive_idle_since: &mut HashMap<(i32, IpFamily), Instant>,
-    adaptive_recover_until: &mut HashMap<(i32, IpFamily), Instant>,
     floor_warn_next_allowed: &mut HashMap<(i32, IpFamily), Instant>,
 ) -> bool {
     let enabled = match family {
@@ -393,10 +383,7 @@ async fn check_family(
     let reconnect_budget = health_reconnect_budget(pool, dc_endpoints.len());
     let reconnect_sem = Arc::new(Semaphore::new(reconnect_budget));
 
-    if pool.floor_mode() == MeFloorMode::Static {
-        adaptive_idle_since.clear();
-        adaptive_recover_until.clear();
-    }
+    if pool.floor_mode() == MeFloorMode::Static {}
 
     let mut live_addr_counts = HashMap::<(i32, SocketAddr), usize>::new();
     let mut live_writer_ids_by_addr = HashMap::<(i32, SocketAddr), Vec<u64>>::new();
@@ -435,8 +422,6 @@ async fn check_family(
         &live_addr_counts,
         &live_writer_ids_by_addr,
         &bound_clients_by_writer,
-        adaptive_idle_since,
-        adaptive_recover_until,
     )
     .await;
     pool.set_adaptive_floor_runtime_caps(
@@ -503,8 +488,6 @@ async fn check_family(
             outage_next_attempt.remove(&key);
             shadow_rotate_deadline.remove(&key);
             idle_refresh_next_attempt.remove(&key);
-            adaptive_idle_since.remove(&key);
-            adaptive_recover_until.remove(&key);
             info!(
                 dc = %dc,
                 ?family,
@@ -632,22 +615,28 @@ async fn check_family(
                         restored += 1;
                         continue;
                     }
-                    pool_for_reconnect
-                        .stats
-                        .increment_me_floor_cap_block_total();
-                    pool_for_reconnect
-                        .stats
-                        .increment_me_floor_swap_idle_failed_total();
-                    debug!(
-                        dc = %dc,
-                        ?family,
-                        alive,
-                        required,
-                        active_cap_effective_total,
-                        "Adaptive floor cap reached, reconnect attempt blocked"
-                    );
-                    break;
+
+                    let base_req = pool_for_reconnect
+                        .required_writers_for_dc_with_floor_mode(endpoints_for_dc.len(), false);
+                    if alive + restored >= base_req {
+                        pool_for_reconnect
+                            .stats
+                            .increment_me_floor_cap_block_total();
+                        pool_for_reconnect
+                            .stats
+                            .increment_me_floor_swap_idle_failed_total();
+                        debug!(
+                            dc = %dc,
+                            ?family,
+                            alive,
+                            required,
+                            active_cap_effective_total,
+                            "Adaptive floor cap reached, reconnect attempt blocked"
+                        );
+                        break;
+                    }
                 }
+                pool_for_reconnect.stats.increment_me_reconnect_attempt();
                 let res = tokio::time::timeout(
                     pool_for_reconnect.reconnect_runtime.me_one_timeout,
                     pool_for_reconnect.connect_endpoints_round_robin(
@@ -663,11 +652,9 @@ async fn check_family(
                         pool_for_reconnect.stats.increment_me_reconnect_success();
                     }
                     Ok(false) => {
-                        pool_for_reconnect.stats.increment_me_reconnect_attempt();
                         debug!(dc = %dc, ?family, "ME round-robin reconnect failed")
                     }
                     Err(_) => {
-                        pool_for_reconnect.stats.increment_me_reconnect_attempt();
                         debug!(dc = %dc, ?family, "ME reconnect timed out");
                     }
                 }
@@ -678,10 +665,8 @@ async fn check_family(
                 key,
                 dc,
                 family,
-                alive,
                 required,
                 endpoint_count: endpoints_for_dc.len(),
-                restored,
             }
         });
     }
@@ -695,7 +680,7 @@ async fn check_family(
             }
         };
         let now = Instant::now();
-        let now_alive = outcome.alive + outcome.restored;
+        let now_alive = live_active_writers_for_dc_family(pool, outcome.dc, outcome.family).await;
         if now_alive >= outcome.required {
             info!(
                 dc = %outcome.dc,
@@ -851,6 +836,33 @@ fn should_emit_rate_limited_warn(
     false
 }
 
+async fn live_active_writers_for_dc_family(pool: &Arc<MePool>, dc: i32, family: IpFamily) -> usize {
+    let writers = pool.writers.read().await;
+    writers
+        .iter()
+        .filter(|writer| {
+            if writer.draining.load(std::sync::atomic::Ordering::Relaxed) {
+                return false;
+            }
+            if writer.writer_dc != dc {
+                return false;
+            }
+            if !matches!(
+                super::pool::WriterContour::from_u8(
+                    writer.contour.load(std::sync::atomic::Ordering::Relaxed),
+                ),
+                super::pool::WriterContour::Active
+            ) {
+                return false;
+            }
+            match family {
+                IpFamily::V4 => writer.addr.is_ipv4(),
+                IpFamily::V6 => writer.addr.is_ipv6(),
+            }
+        })
+        .count()
+}
+
 fn adaptive_floor_class_min(
     pool: &Arc<MePool>,
     endpoint_count: usize,
@@ -904,8 +916,6 @@ async fn build_family_floor_plan(
     live_addr_counts: &HashMap<(i32, SocketAddr), usize>,
     live_writer_ids_by_addr: &HashMap<(i32, SocketAddr), Vec<u64>>,
     bound_clients_by_writer: &HashMap<u64, usize>,
-    adaptive_idle_since: &mut HashMap<(i32, IpFamily), Instant>,
-    adaptive_recover_until: &mut HashMap<(i32, IpFamily), Instant>,
 ) -> FamilyFloorPlan {
     let mut entries = Vec::<DcFloorPlanEntry>::new();
     let mut by_dc = HashMap::<i32, DcFloorPlanEntry>::new();
@@ -921,18 +931,7 @@ async fn build_family_floor_plan(
         if endpoints.is_empty() {
             continue;
         }
-        let key = (*dc, family);
-        let reduce_for_idle = should_reduce_floor_for_idle(
-            pool,
-            key,
-            *dc,
-            endpoints,
-            live_writer_ids_by_addr,
-            bound_clients_by_writer,
-            adaptive_idle_since,
-            adaptive_recover_until,
-        )
-        .await;
+        let _key = (*dc, family);
         let base_required = pool.required_writers_for_dc(endpoints.len()).max(1);
         let min_required = if is_adaptive {
             adaptive_floor_class_min(pool, endpoints.len(), base_required)
@@ -947,11 +946,11 @@ async fn build_family_floor_plan(
         if max_required < min_required {
             max_required = min_required;
         }
-        let desired_raw = if is_adaptive && reduce_for_idle {
-            min_required
-        } else {
-            base_required
-        };
+        // We initialize target_required at base_required to prevent 0-writer blackouts
+        // caused by proactively dropping an idle DC to a single fragile connection.
+        // The Adaptive Floor constraint loop below will gracefully compress idle DCs
+        // (prioritized via has_bound_clients = false) to min_required only when global capacity is reached.
+        let desired_raw = base_required;
         let target_required = desired_raw.clamp(min_required, max_required);
         let alive = endpoints
             .iter()
@@ -1278,43 +1277,6 @@ async fn maybe_refresh_idle_writer_for_dc(
     );
 }
 
-async fn should_reduce_floor_for_idle(
-    pool: &Arc<MePool>,
-    key: (i32, IpFamily),
-    dc: i32,
-    endpoints: &[SocketAddr],
-    live_writer_ids_by_addr: &HashMap<(i32, SocketAddr), Vec<u64>>,
-    bound_clients_by_writer: &HashMap<u64, usize>,
-    adaptive_idle_since: &mut HashMap<(i32, IpFamily), Instant>,
-    adaptive_recover_until: &mut HashMap<(i32, IpFamily), Instant>,
-) -> bool {
-    if pool.floor_mode() != MeFloorMode::Adaptive {
-        adaptive_idle_since.remove(&key);
-        adaptive_recover_until.remove(&key);
-        return false;
-    }
-
-    let now = Instant::now();
-    let writer_ids = list_writer_ids_for_endpoints(dc, endpoints, live_writer_ids_by_addr);
-    let has_bound_clients = has_bound_clients_on_endpoint(&writer_ids, bound_clients_by_writer);
-    if has_bound_clients {
-        adaptive_idle_since.remove(&key);
-        adaptive_recover_until.insert(key, now + pool.adaptive_floor_recover_grace_duration());
-        return false;
-    }
-
-    if let Some(recover_until) = adaptive_recover_until.get(&key)
-        && now < *recover_until
-    {
-        adaptive_idle_since.remove(&key);
-        return false;
-    }
-    adaptive_recover_until.remove(&key);
-
-    let idle_since = adaptive_idle_since.entry(key).or_insert(now);
-    now.saturating_duration_since(*idle_since) >= pool.adaptive_floor_idle_duration()
-}
-
 fn has_bound_clients_on_endpoint(
     writer_ids: &[u64],
     bound_clients_by_writer: &HashMap<u64, usize>,
@@ -1364,6 +1326,7 @@ async fn recover_single_endpoint_outage(
         );
         return;
     };
+    pool.stats.increment_me_reconnect_attempt();
     pool.stats
         .increment_me_single_endpoint_outage_reconnect_attempt_total();
 
@@ -1439,7 +1402,6 @@ async fn recover_single_endpoint_outage(
         return;
     }
 
-    pool.stats.increment_me_reconnect_attempt();
     let current_ms = *outage_backoff.get(&key).unwrap_or(&min_backoff_ms);
     let next_ms = current_ms.saturating_mul(2).min(max_backoff_ms);
     outage_backoff.insert(key, next_ms);

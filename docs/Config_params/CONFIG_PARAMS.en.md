@@ -2293,6 +2293,8 @@ Note: This section also accepts the legacy alias `[server.admin_api]` (same sche
 | [`mask_shape_above_cap_blur`](#mask_shape_above_cap_blur) | `bool` | `false` |
 | [`mask_shape_above_cap_blur_max_bytes`](#mask_shape_above_cap_blur_max_bytes) | `usize` | `512` |
 | [`mask_relay_max_bytes`](#mask_relay_max_bytes) | `usize` | `5242880` |
+| [`mask_relay_timeout_ms`](#mask_relay_timeout_ms) | `u64` | `60_000` |
+| [`mask_relay_idle_timeout_ms`](#mask_relay_idle_timeout_ms) | `u64` | `5_000` |
 | [`mask_classifier_prefetch_timeout_ms`](#mask_classifier_prefetch_timeout_ms) | `u64` | `5` |
 | [`mask_timing_normalization_enabled`](#mask_timing_normalization_enabled) | `bool` | `false` |
 | [`mask_timing_normalization_floor_ms`](#mask_timing_normalization_floor_ms) | `u64` | `0` |
@@ -2538,6 +2540,24 @@ Note: This section also accepts the legacy alias `[server.admin_api]` (same sche
     ```toml
     [censorship]
     mask_relay_max_bytes = 5242880
+    ```
+## mask_relay_timeout_ms
+  - **Constraints / validation**: Should be `>= mask_relay_idle_timeout_ms`.
+  - **Description**: Wall-clock cap for the full masking relay on non-MTProto fallback paths. Raise when the mask target is a long-lived service (e.g. WebSocket). Default: 60 000 ms (1 minute).
+  - **Example**:
+
+    ```toml
+    [censorship]
+    mask_relay_timeout_ms = 60000
+    ```
+## mask_relay_idle_timeout_ms
+  - **Constraints / validation**: Should be `<= mask_relay_timeout_ms`.
+  - **Description**: Per-read idle timeout on masking relay and drain paths. Limits resource consumption by slow-loris attacks and port scanners. A read call stalling beyond this value is treated as an abandoned connection. Default: 5 000 ms (5 s).
+  - **Example**:
+
+    ```toml
+    [censorship]
+    mask_relay_idle_timeout_ms = 5000
     ```
 ## mask_classifier_prefetch_timeout_ms
   - **Constraints / validation**: Must be within `[5, 50]` (milliseconds).

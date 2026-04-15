@@ -97,6 +97,7 @@ pub async fn run_probe(
         let UpstreamType::Direct {
             interface,
             bind_addresses,
+            ..
         } = &upstream.upstream_type
         else {
             continue;

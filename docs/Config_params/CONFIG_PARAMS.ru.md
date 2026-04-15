@@ -2299,6 +2299,8 @@
 | [`mask_shape_above_cap_blur`](#mask_shape_above_cap_blur) | `bool` | `false` |
 | [`mask_shape_above_cap_blur_max_bytes`](#mask_shape_above_cap_blur_max_bytes) | `usize` | `512` |
 | [`mask_relay_max_bytes`](#mask_relay_max_bytes) | `usize` | `5242880` |
+| [`mask_relay_timeout_ms`](mask_relay_timeout_ms) | `u64` | `60_000` |
+| [`mask_relay_idle_timeout_ms`](mask_relay_idle_timeout_ms) | `u64` | `5_000` |
 | [`mask_classifier_prefetch_timeout_ms`](#mask_classifier_prefetch_timeout_ms) | `u64` | `5` |
 | [`mask_timing_normalization_enabled`](#mask_timing_normalization_enabled) | `bool` | `false` |
 | [`mask_timing_normalization_floor_ms`](#mask_timing_normalization_floor_ms) | `u64` | `0` |
@@ -2544,6 +2546,26 @@
     [censorship]
     mask_relay_max_bytes = 5242880
     ```
+
+## mask_relay_timeout_ms
+  - **Constraints / validation**: Должно быть больше или равно  `mask_relay_idle_timeout_ms`.
+  - **Description**: Жёсткий лимит по реальному времени (wall-clock) для полного маскирующего проксирования на fallback-путях без MTProto. Увеличивайте значение, если целевой сервис маскирования является долгоживущим (например, WebSocket-соединение). Значение по умолчанию: 60 000 мс (1 минута).
+  - **Example**:
+
+    ```toml
+    [censorship]
+    mask_relay_timeout_ms = 60000
+    ```
+## mask_relay_idle_timeout_ms
+  - **Constraints / validation**: Должно быть меньше или равно `mask_relay_timeout_ms`.
+  - **Description**: Тайм-аут простоя на каждую операцию чтения (per-read idle timeout) в маскирующем прокси и drain-пайплайнах. Ограничивает потребление ресурсов при атаках типа slow-loris и сканировании портов. Если операция чтения блокируется дольше заданного времени, соединение считается заброшенным и закрывается. Значение по умолчанию: 5 000 мс (5 с).
+  - **Example**:
+
+    ```toml
+    [censorship]
+    mask_relay_idle_timeout_ms = 5000
+    ```
+
 ## mask_classifier_prefetch_timeout_ms
   - **Ограничения / валидация**: Должно быть в пределах `[5, 50]` (миллисекунд).
   - **Описание**: Лимит времени ожидания (в миллисекундах) для расширения первых входящих данных в режиме fallback-маскировки.

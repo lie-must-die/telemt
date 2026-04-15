@@ -598,16 +598,17 @@ secure = false
 tls = true
 
 [server]
-port = {port}
 listen_addr_ipv4 = "0.0.0.0"
 listen_addr_ipv6 = "::"
 
 [[server.listeners]]
 ip = "0.0.0.0"
+port = {port}
 # reuse_allow = false # Set true only when intentionally running multiple telemt instances on same port
 
 [[server.listeners]]
 ip = "::"
+port = {port}
 
 [timeouts]
 client_first_byte_idle_secs = 300

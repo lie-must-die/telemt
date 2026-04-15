@@ -342,7 +342,7 @@ impl MePool {
         allow_coverage_override: bool,
     ) -> Result<()> {
         if !self
-            .can_open_writer_for_contour(contour, allow_coverage_override)
+            .can_open_writer_for_contour(contour, allow_coverage_override, writer_dc)
             .await
         {
             return Err(ProxyError::Proxy(format!(

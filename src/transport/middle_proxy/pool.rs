@@ -1422,22 +1422,6 @@ impl MePool {
         MeFloorMode::from_u8(self.floor_runtime.me_floor_mode.load(Ordering::Relaxed))
     }
 
-    pub(super) fn adaptive_floor_idle_duration(&self) -> Duration {
-        Duration::from_secs(
-            self.floor_runtime
-                .me_adaptive_floor_idle_secs
-                .load(Ordering::Relaxed),
-        )
-    }
-
-    pub(super) fn adaptive_floor_recover_grace_duration(&self) -> Duration {
-        Duration::from_secs(
-            self.floor_runtime
-                .me_adaptive_floor_recover_grace_secs
-                .load(Ordering::Relaxed),
-        )
-    }
-
     pub(super) fn adaptive_floor_min_writers_multi_endpoint(&self) -> usize {
         (self
             .floor_runtime
@@ -1659,6 +1643,7 @@ impl MePool {
         &self,
         contour: WriterContour,
         allow_coverage_override: bool,
+        writer_dc: i32,
     ) -> bool {
         let (active_writers, warm_writers, _) = self.non_draining_writer_counts_by_contour().await;
         match contour {
@@ -1670,6 +1655,43 @@ impl MePool {
                 if !allow_coverage_override {
                     return false;
                 }
+
+                let mut endpoints_len = 0;
+                let now_epoch = Self::now_epoch_secs();
+                if self.family_enabled_for_drain_coverage(IpFamily::V4, now_epoch) {
+                    if let Some(addrs) = self.proxy_map_v4.read().await.get(&writer_dc) {
+                        endpoints_len += addrs.len();
+                    }
+                }
+                if self.family_enabled_for_drain_coverage(IpFamily::V6, now_epoch) {
+                    if let Some(addrs) = self.proxy_map_v6.read().await.get(&writer_dc) {
+                        endpoints_len += addrs.len();
+                    }
+                }
+
+                if endpoints_len > 0 {
+                    let base_req =
+                        self.required_writers_for_dc_with_floor_mode(endpoints_len, false);
+                    let active_for_dc = {
+                        let ws = self.writers.read().await;
+                        ws.iter()
+                            .filter(|w| {
+                                !w.draining.load(std::sync::atomic::Ordering::Relaxed)
+                                    && w.writer_dc == writer_dc
+                                    && matches!(
+                                        WriterContour::from_u8(
+                                            w.contour.load(std::sync::atomic::Ordering::Relaxed),
+                                        ),
+                                        WriterContour::Active
+                                    )
+                            })
+                            .count()
+                    };
+                    if active_for_dc < base_req {
+                        return true;
+                    }
+                }
+
                 let coverage_required = self.active_coverage_required_total().await;
                 active_writers < coverage_required
             }

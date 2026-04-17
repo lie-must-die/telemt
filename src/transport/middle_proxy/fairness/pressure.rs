@@ -136,8 +136,8 @@ impl PressureEvaluator {
         let queue_ratio_pct = if max_total_queued_bytes == 0 {
             100
         } else {
-            ((signals.total_queued_bytes.saturating_mul(100)) / max_total_queued_bytes)
-                .min(100) as u8
+            ((signals.total_queued_bytes.saturating_mul(100)) / max_total_queued_bytes).min(100)
+                as u8
         };
 
         let standing_ratio_pct = if signals.active_flows == 0 {

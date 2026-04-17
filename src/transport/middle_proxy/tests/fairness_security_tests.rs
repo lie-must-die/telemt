@@ -175,7 +175,8 @@ fn fairness_randomized_sequence_preserves_memory_bounds() {
             } else {
                 DispatchFeedback::QueueFull
             };
-            let _ = fairness.apply_dispatch_feedback(candidate.frame.conn_id, candidate, feedback, now);
+            let _ =
+                fairness.apply_dispatch_feedback(candidate.frame.conn_id, candidate, feedback, now);
         }
 
         let snapshot = fairness.snapshot();

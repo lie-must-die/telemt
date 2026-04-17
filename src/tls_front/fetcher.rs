@@ -794,7 +794,9 @@ async fn connect_tcp_with_upstream(
     ))
 }
 
-fn socket_addrs_from_upstream_stream(stream: &UpstreamStream) -> (Option<SocketAddr>, Option<SocketAddr>) {
+fn socket_addrs_from_upstream_stream(
+    stream: &UpstreamStream,
+) -> (Option<SocketAddr>, Option<SocketAddr>) {
     match stream {
         UpstreamStream::Tcp(tcp) => (tcp.local_addr().ok(), tcp.peer_addr().ok()),
         UpstreamStream::Shadowsocks(_) => (None, None),
@@ -820,12 +822,16 @@ fn build_tls_fetch_proxy_header(
         }
         _ => {
             let header = match (src_addr, dst_addr) {
-                (Some(SocketAddr::V4(src)), Some(SocketAddr::V4(dst))) => ProxyProtocolV1Builder::new()
-                    .tcp4(src.into(), dst.into())
-                    .build(),
-                (Some(SocketAddr::V6(src)), Some(SocketAddr::V6(dst))) => ProxyProtocolV1Builder::new()
-                    .tcp6(src.into(), dst.into())
-                    .build(),
+                (Some(SocketAddr::V4(src)), Some(SocketAddr::V4(dst))) => {
+                    ProxyProtocolV1Builder::new()
+                        .tcp4(src.into(), dst.into())
+                        .build()
+                }
+                (Some(SocketAddr::V6(src)), Some(SocketAddr::V6(dst))) => {
+                    ProxyProtocolV1Builder::new()
+                        .tcp6(src.into(), dst.into())
+                        .build()
+                }
                 _ => ProxyProtocolV1Builder::new().build(),
             };
             Some(header)
@@ -1472,7 +1478,9 @@ mod tests {
 
         assert_eq!(
             &header[..12],
-            &[0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a]
+            &[
+                0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a
+            ]
         );
         assert_eq!(header[12], 0x21);
         assert_eq!(header[13], 0x11);

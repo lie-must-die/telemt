@@ -289,17 +289,9 @@ impl<S> StatsIo<S> {
         let Some(started_at) = wait.started_at.take() else {
             return;
         };
-        let wait_ms = started_at
-            .elapsed()
-            .as_millis()
-            .min(u128::from(u64::MAX)) as u64;
+        let wait_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
         if let Some(lease) = lease {
-            lease.observe_wait_ms(
-                direction,
-                wait.blocked_user,
-                wait.blocked_cidr,
-                wait_ms,
-            );
+            lease.observe_wait_ms(direction, wait.blocked_user, wait.blocked_cidr, wait_ms);
         }
         wait.blocked_user = false;
         wait.blocked_cidr = false;
@@ -340,8 +332,7 @@ impl<S> StatsIo<S> {
         while self.c2s_rate_debt_bytes > 0 {
             let consume = lease.try_consume(RateDirection::Up, self.c2s_rate_debt_bytes);
             if consume.granted > 0 {
-                self.c2s_rate_debt_bytes =
-                    self.c2s_rate_debt_bytes.saturating_sub(consume.granted);
+                self.c2s_rate_debt_bytes = self.c2s_rate_debt_bytes.saturating_sub(consume.granted);
                 continue;
             }
             Self::arm_wait(
@@ -647,7 +638,10 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for StatsIo<S> {
         match Pin::new(&mut this.inner).poll_write(cx, write_buf) {
             Poll::Ready(Ok(n)) => {
                 if reserved_bytes > n as u64 {
-                    refund_reserved_quota_bytes(this.user_stats.as_ref(), reserved_bytes - n as u64);
+                    refund_reserved_quota_bytes(
+                        this.user_stats.as_ref(),
+                        reserved_bytes - n as u64,
+                    );
                 }
                 if shaper_reserved_bytes > n as u64
                     && let Some(lease) = this.traffic_lease.as_ref()

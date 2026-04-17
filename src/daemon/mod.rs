@@ -8,8 +8,8 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
-use nix::fcntl::{Flock, FlockArg};
 use nix::errno::Errno;
+use nix::fcntl::{Flock, FlockArg};
 use nix::unistd::{self, ForkResult, Gid, Pid, Uid, chdir, close, fork, getpid, setsid};
 use tracing::{debug, info, warn};
 
@@ -350,11 +350,7 @@ fn set_supplementary_groups(gid: Gid) -> Result<(), nix::Error> {
                 groups.as_ptr(),
             )
         };
-        if rc == 0 {
-            Ok(())
-        } else {
-            Err(Errno::last())
-        }
+        if rc == 0 { Ok(()) } else { Err(Errno::last()) }
     }
 
     #[cfg(not(target_os = "macos"))]

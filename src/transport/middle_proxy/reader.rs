@@ -118,20 +118,22 @@ fn apply_fairness_metrics_delta(
     stats.set_me_fair_backpressured_flows_gauge(current.backpressured_flows as u64);
     stats.set_me_fair_pressure_state_gauge(current.pressure_state.as_u8() as u64);
     stats.add_me_fair_scheduler_rounds_total(
-        current.scheduler_rounds.saturating_sub(prev.scheduler_rounds),
+        current
+            .scheduler_rounds
+            .saturating_sub(prev.scheduler_rounds),
     );
     stats.add_me_fair_deficit_grants_total(
         current.deficit_grants.saturating_sub(prev.deficit_grants),
     );
-    stats.add_me_fair_deficit_skips_total(
-        current.deficit_skips.saturating_sub(prev.deficit_skips),
-    );
+    stats.add_me_fair_deficit_skips_total(current.deficit_skips.saturating_sub(prev.deficit_skips));
     stats.add_me_fair_enqueue_rejects_total(
         current.enqueue_rejects.saturating_sub(prev.enqueue_rejects),
     );
     stats.add_me_fair_shed_drops_total(current.shed_drops.saturating_sub(prev.shed_drops));
     stats.add_me_fair_penalties_total(
-        current.fairness_penalties.saturating_sub(prev.fairness_penalties),
+        current
+            .fairness_penalties
+            .saturating_sub(prev.fairness_penalties),
     );
     stats.add_me_fair_downstream_stalls_total(
         current

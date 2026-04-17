@@ -190,8 +190,16 @@ pub(crate) async fn spawn_runtime_tasks(
     );
     let mut config_rx_rate_limits = config_rx.clone();
     tokio::spawn(async move {
-        let mut prev_user_limits = config_rx_rate_limits.borrow().access.user_rate_limits.clone();
-        let mut prev_cidr_limits = config_rx_rate_limits.borrow().access.cidr_rate_limits.clone();
+        let mut prev_user_limits = config_rx_rate_limits
+            .borrow()
+            .access
+            .user_rate_limits
+            .clone();
+        let mut prev_cidr_limits = config_rx_rate_limits
+            .borrow()
+            .access
+            .cidr_rate_limits
+            .clone();
         loop {
             if config_rx_rate_limits.changed().await.is_err() {
                 break;

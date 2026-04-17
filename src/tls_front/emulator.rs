@@ -98,7 +98,9 @@ fn emulated_ticket_record_sizes(
 
     let target_count = sizes
         .len()
-        .max(usize::from(new_session_tickets.min(MAX_TICKET_RECORDS as u8)))
+        .max(usize::from(
+            new_session_tickets.min(MAX_TICKET_RECORDS as u8),
+        ))
         .min(MAX_TICKET_RECORDS);
 
     while sizes.len() < target_count {
@@ -329,11 +331,11 @@ pub fn build_emulated_server_hello(
     let mut tickets = Vec::new();
     for ticket_len in emulated_ticket_record_sizes(cached, new_session_tickets, rng) {
         let mut rec = Vec::with_capacity(5 + ticket_len);
-            rec.push(TLS_RECORD_APPLICATION);
-            rec.extend_from_slice(&TLS_VERSION);
-            rec.extend_from_slice(&(ticket_len as u16).to_be_bytes());
-            rec.extend_from_slice(&rng.bytes(ticket_len));
-            tickets.extend_from_slice(&rec);
+        rec.push(TLS_RECORD_APPLICATION);
+        rec.extend_from_slice(&TLS_VERSION);
+        rec.extend_from_slice(&(ticket_len as u16).to_be_bytes());
+        rec.extend_from_slice(&rng.bytes(ticket_len));
+        tickets.extend_from_slice(&rec);
     }
 
     let mut response = Vec::with_capacity(

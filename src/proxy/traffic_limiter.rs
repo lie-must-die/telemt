@@ -74,7 +74,8 @@ impl ScopeMetrics {
                 self.wait_up_ms_total.fetch_add(wait_ms, Ordering::Relaxed);
             }
             RateDirection::Down => {
-                self.wait_down_ms_total.fetch_add(wait_ms, Ordering::Relaxed);
+                self.wait_down_ms_total
+                    .fetch_add(wait_ms, Ordering::Relaxed);
             }
         }
     }
@@ -254,9 +255,7 @@ impl CidrDirectionBucket {
             let grant = if guaranteed_remaining > 0 {
                 requested.min(guaranteed_remaining).min(total_remaining)
             } else {
-                requested
-                    .min(total_remaining)
-                    .min(MAX_BORROW_CHUNK_BYTES)
+                requested.min(total_remaining).min(MAX_BORROW_CHUNK_BYTES)
             };
 
             if grant == 0 {
@@ -266,12 +265,7 @@ impl CidrDirectionBucket {
             let next_total = total_used.saturating_add(grant);
             if self
                 .used
-                .compare_exchange_weak(
-                    total_used,
-                    next_total,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                )
+                .compare_exchange_weak(total_used, next_total, Ordering::Relaxed, Ordering::Relaxed)
                 .is_ok()
             {
                 user_state.used.fetch_add(grant, Ordering::Relaxed);
@@ -430,8 +424,14 @@ struct PolicySnapshot {
 impl PolicySnapshot {
     fn match_cidr(&self, ip: IpAddr) -> Option<&CidrRule> {
         match ip {
-            IpAddr::V4(_) => self.cidr_rules_v4.iter().find(|rule| rule.cidr.contains(ip)),
-            IpAddr::V6(_) => self.cidr_rules_v6.iter().find(|rule| rule.cidr.contains(ip)),
+            IpAddr::V4(_) => self
+                .cidr_rules_v4
+                .iter()
+                .find(|rule| rule.cidr.contains(ip)),
+            IpAddr::V6(_) => self
+                .cidr_rules_v6
+                .iter()
+                .find(|rule| rule.cidr.contains(ip)),
         }
     }
 }
@@ -535,7 +535,8 @@ impl TrafficLease {
         if let (Some(cidr_bucket), Some(cidr_user_share)) =
             (self.cidr_bucket.as_ref(), self.cidr_user_share.as_ref())
         {
-            let cidr_granted = cidr_bucket.try_consume_for_user(direction, cidr_user_share, granted);
+            let cidr_granted =
+                cidr_bucket.try_consume_for_user(direction, cidr_user_share, granted);
             if cidr_granted < granted
                 && let Some(user_bucket) = self.user_bucket.as_ref()
             {
@@ -693,7 +694,9 @@ impl TrafficLimiter {
                 .get_or_insert_with(user, || UserBucket::new(limit));
             bucket.set_rates(limit);
             bucket.active_leases.fetch_add(1, Ordering::Relaxed);
-            self.user_scope.active_leases.fetch_add(1, Ordering::Relaxed);
+            self.user_scope
+                .active_leases
+                .fetch_add(1, Ordering::Relaxed);
             user_bucket = Some(bucket);
         }
 
@@ -706,7 +709,9 @@ impl TrafficLimiter {
                 .get_or_insert_with(rule.key.as_str(), || CidrBucket::new(rule.limits));
             bucket.set_rates(rule.limits);
             bucket.active_leases.fetch_add(1, Ordering::Relaxed);
-            self.cidr_scope.active_leases.fetch_add(1, Ordering::Relaxed);
+            self.cidr_scope
+                .active_leases
+                .fetch_add(1, Ordering::Relaxed);
             let share = bucket.acquire_user_share(user);
             cidr_user_key = Some(user.to_string());
             cidr_user_share = Some(share);
@@ -784,7 +789,8 @@ impl TrafficLimiter {
 
         let policy = self.policy.load_full();
         self.user_buckets.retain(|user, bucket| {
-            bucket.active_leases.load(Ordering::Relaxed) > 0 || policy.user_limits.contains_key(user)
+            bucket.active_leases.load(Ordering::Relaxed) > 0
+                || policy.user_limits.contains_key(user)
         });
         self.cidr_buckets.retain(|cidr_key, bucket| {
             bucket.cleanup_idle_users();

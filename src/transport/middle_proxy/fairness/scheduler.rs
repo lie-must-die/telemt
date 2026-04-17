@@ -166,7 +166,8 @@ impl WorkerFairnessState {
             return AdmissionDecision::RejectSaturated;
         }
 
-        if self.total_queued_bytes.saturating_add(frame_bytes) > self.config.max_total_queued_bytes {
+        if self.total_queued_bytes.saturating_add(frame_bytes) > self.config.max_total_queued_bytes
+        {
             self.pressure
                 .note_admission_reject(now, &self.config.pressure);
             self.enqueue_rejects = self.enqueue_rejects.saturating_add(1);
@@ -211,7 +212,8 @@ impl WorkerFairnessState {
                 .expect("flow inserted must be retrievable")
         };
 
-        if entry.fairness.pending_bytes.saturating_add(frame_bytes) > self.config.max_flow_queued_bytes
+        if entry.fairness.pending_bytes.saturating_add(frame_bytes)
+            > self.config.max_flow_queued_bytes
         {
             self.pressure
                 .note_admission_reject(now, &self.config.pressure);
@@ -237,7 +239,8 @@ impl WorkerFairnessState {
         entry.queue.push_back(frame);
 
         self.total_queued_bytes = self.total_queued_bytes.saturating_add(frame_bytes);
-        self.bucket_queued_bytes[bucket_id] = self.bucket_queued_bytes[bucket_id].saturating_add(frame_bytes);
+        self.bucket_queued_bytes[bucket_id] =
+            self.bucket_queued_bytes[bucket_id].saturating_add(frame_bytes);
 
         if !entry.fairness.in_active_ring {
             entry.fairness.in_active_ring = true;
@@ -277,23 +280,31 @@ impl WorkerFairnessState {
 
                 Self::classify_flow(&self.config, pressure_state, now, &mut flow.fairness);
 
-                let quantum = Self::effective_quantum_bytes(&self.config, pressure_state, &flow.fairness);
-                flow.fairness.deficit_bytes =
-                    flow.fairness.deficit_bytes.saturating_add(i64::from(quantum));
+                let quantum =
+                    Self::effective_quantum_bytes(&self.config, pressure_state, &flow.fairness);
+                flow.fairness.deficit_bytes = flow
+                    .fairness
+                    .deficit_bytes
+                    .saturating_add(i64::from(quantum));
                 self.deficit_grants = self.deficit_grants.saturating_add(1);
 
                 let front_len = flow.queue.front().map_or(0, |front| front.queued_bytes());
                 if flow.fairness.deficit_bytes < front_len as i64 {
-                    flow.fairness.consecutive_skips = flow.fairness.consecutive_skips.saturating_add(1);
+                    flow.fairness.consecutive_skips =
+                        flow.fairness.consecutive_skips.saturating_add(1);
                     self.deficit_skips = self.deficit_skips.saturating_add(1);
                     requeue_active = true;
                 } else if let Some(frame) = flow.queue.pop_front() {
                     drained_bytes = frame.queued_bytes();
-                    flow.fairness.pending_bytes = flow.fairness.pending_bytes.saturating_sub(drained_bytes);
-                    flow.fairness.deficit_bytes =
-                        flow.fairness.deficit_bytes.saturating_sub(drained_bytes as i64);
+                    flow.fairness.pending_bytes =
+                        flow.fairness.pending_bytes.saturating_sub(drained_bytes);
+                    flow.fairness.deficit_bytes = flow
+                        .fairness
+                        .deficit_bytes
+                        .saturating_sub(drained_bytes as i64);
                     flow.fairness.consecutive_skips = 0;
-                    flow.fairness.queue_started_at = flow.queue.front().map(|front| front.enqueued_at);
+                    flow.fairness.queue_started_at =
+                        flow.queue.front().map(|front| front.enqueued_at);
                     requeue_active = !flow.queue.is_empty();
                     if !requeue_active {
                         flow.fairness.scheduler_state = FlowSchedulerState::Idle;
@@ -359,7 +370,8 @@ impl WorkerFairnessState {
                     return DispatchAction::Continue;
                 };
 
-                flow.fairness.consecutive_stalls = flow.fairness.consecutive_stalls.saturating_add(1);
+                flow.fairness.consecutive_stalls =
+                    flow.fairness.consecutive_stalls.saturating_add(1);
                 flow.fairness.scheduler_state = FlowSchedulerState::Backpressured;
                 flow.fairness.pressure_class = FlowPressureClass::Backpressured;
 
@@ -376,7 +388,8 @@ impl WorkerFairnessState {
                 } else {
                     let frame_bytes = candidate.frame.queued_bytes();
                     flow.queue.push_front(candidate.frame);
-                    flow.fairness.pending_bytes = flow.fairness.pending_bytes.saturating_add(frame_bytes);
+                    flow.fairness.pending_bytes =
+                        flow.fairness.pending_bytes.saturating_add(frame_bytes);
                     if flow.fairness.queue_started_at.is_none() {
                         flow.fairness.queue_started_at = Some(now);
                     }
@@ -390,7 +403,8 @@ impl WorkerFairnessState {
                     }
                 }
 
-                if flow.fairness.consecutive_stalls >= self.config.max_consecutive_stalls_before_close
+                if flow.fairness.consecutive_stalls
+                    >= self.config.max_consecutive_stalls_before_close
                     && self.pressure.state() == PressureState::Saturated
                 {
                     self.remove_flow(conn_id);
@@ -414,18 +428,16 @@ impl WorkerFairnessState {
             return;
         };
 
-        self.bucket_active_flows[entry.fairness.bucket_id] = self.bucket_active_flows
-            [entry.fairness.bucket_id]
-            .saturating_sub(1);
+        self.bucket_active_flows[entry.fairness.bucket_id] =
+            self.bucket_active_flows[entry.fairness.bucket_id].saturating_sub(1);
 
         let mut reclaimed = 0u64;
         for frame in entry.queue {
             reclaimed = reclaimed.saturating_add(frame.queued_bytes());
         }
         self.total_queued_bytes = self.total_queued_bytes.saturating_sub(reclaimed);
-        self.bucket_queued_bytes[entry.fairness.bucket_id] = self.bucket_queued_bytes
-            [entry.fairness.bucket_id]
-            .saturating_sub(reclaimed);
+        self.bucket_queued_bytes[entry.fairness.bucket_id] =
+            self.bucket_queued_bytes[entry.fairness.bucket_id].saturating_sub(reclaimed);
     }
 
     fn evaluate_pressure(&mut self, now: Instant, force: bool) {

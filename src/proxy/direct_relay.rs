@@ -316,7 +316,9 @@ where
 
     stats.increment_user_connects(user);
     let _direct_connection_lease = stats.acquire_direct_connection_lease();
-    let traffic_lease = shared.traffic_limiter.acquire_lease(user, success.peer.ip());
+    let traffic_lease = shared
+        .traffic_limiter
+        .acquire_lease(user, success.peer.ip());
 
     let buffer_pool_trim = Arc::clone(&buffer_pool);
     let relay_activity_timeout = if shared.conntrack_pressure_active() {

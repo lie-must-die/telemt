@@ -122,7 +122,8 @@ pub struct HotFields {
     pub user_expirations: std::collections::HashMap<String, chrono::DateTime<chrono::Utc>>,
     pub user_data_quota: std::collections::HashMap<String, u64>,
     pub user_rate_limits: std::collections::HashMap<String, crate::config::RateLimitBps>,
-    pub cidr_rate_limits: std::collections::HashMap<ipnetwork::IpNetwork, crate::config::RateLimitBps>,
+    pub cidr_rate_limits:
+        std::collections::HashMap<ipnetwork::IpNetwork, crate::config::RateLimitBps>,
     pub user_max_unique_ips: std::collections::HashMap<String, usize>,
     pub user_max_unique_ips_global_each: usize,
     pub user_max_unique_ips_mode: crate::config::UserMaxUniqueIpsMode,

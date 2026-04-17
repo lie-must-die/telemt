@@ -3,6 +3,9 @@
 mod codec;
 mod config_updater;
 mod fairness;
+#[cfg(test)]
+#[path = "tests/fairness_security_tests.rs"]
+mod fairness_security_tests;
 mod handshake;
 mod health;
 #[cfg(test)]
@@ -31,9 +34,6 @@ mod pool_writer;
 #[cfg(test)]
 #[path = "tests/pool_writer_security_tests.rs"]
 mod pool_writer_security_tests;
-#[cfg(test)]
-#[path = "tests/fairness_security_tests.rs"]
-mod fairness_security_tests;
 mod reader;
 mod registry;
 mod rotation;

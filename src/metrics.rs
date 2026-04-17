@@ -1310,6 +1310,143 @@ async fn render_metrics(
             0
         }
     );
+    let _ = writeln!(
+        out,
+        "# HELP telemt_me_fair_pressure_state Worker-local fairness pressure state"
+    );
+    let _ = writeln!(out, "# TYPE telemt_me_fair_pressure_state gauge");
+    let _ = writeln!(
+        out,
+        "telemt_me_fair_pressure_state {}",
+        if me_allows_normal {
+            stats.get_me_fair_pressure_state_gauge()
+        } else {
+            0
+        }
+    );
+
+    let _ = writeln!(
+        out,
+        "# HELP telemt_me_fair_active_flows Fair-scheduler active flow count"
+    );
+    let _ = writeln!(out, "# TYPE telemt_me_fair_active_flows gauge");
+    let _ = writeln!(
+        out,
+        "telemt_me_fair_active_flows {}",
+        if me_allows_normal {
+            stats.get_me_fair_active_flows_gauge()
+        } else {
+            0
+        }
+    );
+
+    let _ = writeln!(
+        out,
+        "# HELP telemt_me_fair_queued_bytes Fair-scheduler queued bytes"
+    );
+    let _ = writeln!(out, "# TYPE telemt_me_fair_queued_bytes gauge");
+    let _ = writeln!(
+        out,
+        "telemt_me_fair_queued_bytes {}",
+        if me_allows_normal {
+            stats.get_me_fair_queued_bytes_gauge()
+        } else {
+            0
+        }
+    );
+
+    let _ = writeln!(
+        out,
+        "# HELP telemt_me_fair_flow_state_gauge Fair-scheduler flow health classes"
+    );
+    let _ = writeln!(out, "# TYPE telemt_me_fair_flow_state_gauge gauge");
+    let _ = writeln!(
+        out,
+        "telemt_me_fair_flow_state_gauge{{class=\"standing\"}} {}",
+        if me_allows_normal {
+            stats.get_me_fair_standing_flows_gauge()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_me_fair_flow_state_gauge{{class=\"backpressured\"}} {}",
+        if me_allows_normal {
+            stats.get_me_fair_backpressured_flows_gauge()
+        } else {
+            0
+        }
+    );
+
+    let _ = writeln!(
+        out,
+        "# HELP telemt_me_fair_events_total Fair-scheduler event counters"
+    );
+    let _ = writeln!(out, "# TYPE telemt_me_fair_events_total counter");
+    let _ = writeln!(
+        out,
+        "telemt_me_fair_events_total{{event=\"scheduler_round\"}} {}",
+        if me_allows_normal {
+            stats.get_me_fair_scheduler_rounds_total()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_me_fair_events_total{{event=\"deficit_grant\"}} {}",
+        if me_allows_normal {
+            stats.get_me_fair_deficit_grants_total()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_me_fair_events_total{{event=\"deficit_skip\"}} {}",
+        if me_allows_normal {
+            stats.get_me_fair_deficit_skips_total()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_me_fair_events_total{{event=\"enqueue_reject\"}} {}",
+        if me_allows_normal {
+            stats.get_me_fair_enqueue_rejects_total()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_me_fair_events_total{{event=\"shed_drop\"}} {}",
+        if me_allows_normal {
+            stats.get_me_fair_shed_drops_total()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_me_fair_events_total{{event=\"penalty\"}} {}",
+        if me_allows_normal {
+            stats.get_me_fair_penalties_total()
+        } else {
+            0
+        }
+    );
+    let _ = writeln!(
+        out,
+        "telemt_me_fair_events_total{{event=\"downstream_stall\"}} {}",
+        if me_allows_normal {
+            stats.get_me_fair_downstream_stalls_total()
+        } else {
+            0
+        }
+    );
 
     let _ = writeln!(
         out,

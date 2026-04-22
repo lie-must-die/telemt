@@ -282,3 +282,66 @@ This live test demonstrates the intended behavior end to end:
 - the degraded DC stays in localized retry and recovery handling;
 - admission metrics now expose both the transition and the recovery in a
   directly observable form.
+
+## Future policy work
+
+The current change fixes a correctness issue in partial degradation handling:
+
+- localized ME coverage loss must not collapse admission into a false global
+  not-ready state;
+- healthy DCs must remain eligible for Middle-End routing while coverage still
+  exists.
+
+This does not yet define the final production policy for when partially
+available Middle-End should be considered operationally worse than global
+Direct-DC routing.
+
+That policy should be designed separately from this fix.
+
+### Why this is a separate problem
+
+`ready_dcs > 0` is a good correctness condition for "ME is not fully dead", but
+it is not sufficient by itself to answer whether remaining ME coverage is still
+the best choice for overall system performance.
+
+For example:
+
+- one or two healthy target DCs may still justify keeping partial ME active;
+- a very small remaining ready set may still be formally usable, but no longer
+  provide the best operational result for most new sessions.
+
+### Recommended direction
+
+If Telemt later needs an earlier global cutover policy, it should not be based
+only on "how many DCs are dead".
+
+A better design would evaluate:
+
+- coverage ratio:
+  - `ready_dcs / configured_dcs`
+- route quality signals:
+  - `telemt_me_no_writer_failfast_total`
+  - `telemt_me_hybrid_timeout_total`
+  - `telemt_me_route_drop_no_conn_total`
+  - sustained reconnect / refill churn
+- time-based hysteresis:
+  - degraded conditions should persist for a window before enabling a global
+    Direct-DC policy
+  - recovery conditions should also persist before restoring full Middle-End
+    preference
+
+### Suggested future plan
+
+1. Keep the current fix focused on correctness and observability.
+2. Continue collecting live data from admission coverage and route-quality
+   metrics.
+3. Validate additional multi-DC degradation scenarios.
+4. Design a separate quality-based fallback policy if production behavior shows
+   that partial ME should sometimes yield to global Direct-DC before
+   `ready_dcs` reaches zero.
+
+Until such a policy is designed and validated, the current behavior should be
+understood as:
+
+- correctness-first partial degradation handling;
+- not the final optimization policy for every degraded production state.
